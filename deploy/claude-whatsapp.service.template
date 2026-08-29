@@ -1,0 +1,19 @@
+[Unit]
+Description=Claude-WhatsApp bridge (gowa webhook -> claude CLI -> gowa reply)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_DIR__
+# systemd --user services don't source .bashrc/.profile, so claude and
+# anything it shells out to (bun, node, git, ...) need PATH set explicitly.
+# scripts/deploy.sh fills this in with your actual shell PATH at install time.
+Environment=PATH=__PATH__
+EnvironmentFile=__REPO_DIR__/.env
+ExecStart=__REPO_DIR__/bin/bridge
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
