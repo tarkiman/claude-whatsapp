@@ -1,0 +1,38 @@
+services:
+  gowa:
+    image: aldinokemal2104/go-whatsapp-web-multidevice:latest
+    container_name: claude-whatsapp-gowa
+    restart: unless-stopped
+    # Webhook is configured via CLI flag, not env vars (matches the pattern
+    # used in event-organizer-ticketing / enterprise-ai-agent-platform).
+    command: >-
+      rest
+      --webhook=http://host.docker.internal:8099/webhook
+      --webhook-secret=${WEBHOOK_SECRET}
+      --webhook-events=message
+      --basic-auth=${GOWA_BASIC_AUTH_USER}:${GOWA_BASIC_AUTH_PASSWORD}
+    ports:
+      - "${GOWA_PORT:-3011}:3000"
+    volumes:
+      - ./data/whatsapp:/app/storages
+      # Auto-downloaded media (images/video/audio/documents/stickers) lands
+      # under /app/statics/media inside the container — mount the whole
+      # /app/statics so the bridge (on the host) can read whatever gowa's
+      # webhook payload points to (e.g. "statics/media/xxx.jpg").
+      - ./data/statics:/app/statics
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # gowa's entrypoint chowns its media dir to an internal container uid
+  # (20001) and writes files as mode 0600 — unreadable by the host user
+  # running the bridge. This sidecar (runs as root by default, same as any
+  # plain alpine container) periodically loosens permissions on the shared
+  # volume so newly downloaded attachments become readable within seconds.
+  gowa-media-perms-fix:
+    image: alpine:3.19
+    container_name: claude-whatsapp-gowa-media-perms-fix
+    restart: unless-stopped
+    volumes:
+      - ./data/statics:/data/statics:rw
+    command: >-
+      sh -c "while true; do chmod -R o+rX /data/statics 2>/dev/null; sleep 5; done"
