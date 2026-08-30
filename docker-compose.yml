@@ -28,6 +28,11 @@ services:
   # running the bridge. This sidecar (runs as root by default, same as any
   # plain alpine container) periodically loosens permissions on the shared
   # volume so newly downloaded attachments become readable within seconds.
+  # 1s poll (not 5s): voice notes are transcribed by the bridge almost
+  # immediately after the webhook fires, so a wider window means a real
+  # chance of losing the race against this loop — internal/transcribe also
+  # retries on its own (waitReadable), but tightening this shrinks how
+  # often that retry path has to do any work at all.
   gowa-media-perms-fix:
     image: alpine:3.19
     container_name: claude-whatsapp-gowa-media-perms-fix
@@ -35,4 +40,4 @@ services:
     volumes:
       - ./data/statics:/data/statics:rw
     command: >-
-      sh -c "while true; do chmod -R o+rX /data/statics 2>/dev/null; sleep 5; done"
+      sh -c "while true; do chmod -R o+rX /data/statics 2>/dev/null; sleep 1; done"
