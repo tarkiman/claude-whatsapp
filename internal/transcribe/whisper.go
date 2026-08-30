@@ -46,6 +46,17 @@ func (t *Transcriber) Transcribe(ctx context.Context, audioPath string) (string,
 	ctx, cancel := context.WithTimeout(ctx, t.Timeout)
 	defer cancel()
 
+	// Voice notes race docker-compose.yml's gowa-media-perms-fix sidecar,
+	// which only loosens a freshly-downloaded attachment's permissions
+	// (gowa writes it 0600, owned by a container-internal uid) every few
+	// seconds. Images/documents rarely hit this because Claude reads them
+	// several seconds into a claude -p run, but this goroutine calls
+	// ffmpeg on the file almost immediately after the webhook fires — so
+	// wait for it to actually become readable first instead of racing.
+	if err := waitReadable(ctx, audioPath, 8*time.Second); err != nil {
+		return "", err
+	}
+
 	wavPath, err := t.toWav(ctx, audioPath)
 	if err != nil {
 		return "", err
@@ -72,6 +83,29 @@ func (t *Transcriber) Transcribe(ctx context.Context, audioPath string) (string,
 		return "", fmt.Errorf("whisper-cli produced an empty transcript")
 	}
 	return text, nil
+}
+
+// waitReadable blocks until path can be opened for reading, or timeout
+// elapses — see the comment in Transcribe for why this is needed.
+func waitReadable(ctx context.Context, path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		f, err := os.Open(path)
+		if err == nil {
+			f.Close()
+			return nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for %s to become readable: %w", path, lastErr)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
 }
 
 func (t *Transcriber) toWav(ctx context.Context, audioPath string) (string, error) {
