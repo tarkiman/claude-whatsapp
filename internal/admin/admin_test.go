@@ -44,10 +44,10 @@ func TestGuard(t *testing.T) {
 		{"POST same-origin", Options{}, "POST", "127.0.0.1:5000", "localhost:8098", map[string]string{adminHeader: "1", "Origin": "http://localhost:8098"}, "", 200},
 
 		{"LAN client not allowed by default", Options{}, "GET", "192.168.1.50:5000", "localhost:8098", nil, "", 403},
-		{"LAN client in allowed net", Options{AllowedNets: mustNets(t, "192.168.1.0/24"), AllowedHosts: []string{"192.168.1.11"}}, "GET", "192.168.1.50:5000", "192.168.1.11:8098", nil, "", 200},
-		{"ZeroTier client in allowed net", Options{AllowedNets: mustNets(t, "192.168.1.0/24", "172.22.0.0/16"), AllowedHosts: []string{"172.22.195.49"}}, "GET", "172.22.10.7:5000", "172.22.195.49:8098", nil, "", 200},
-		{"outside client refused", Options{AllowedNets: mustNets(t, "192.168.1.0/24", "172.22.0.0/16")}, "GET", "8.8.8.8:5000", "192.168.1.11:8098", nil, "", 403},
-		{"allowed client but unlisted Host", Options{AllowedNets: mustNets(t, "192.168.1.0/24")}, "GET", "192.168.1.50:5000", "192.168.1.11:8098", nil, "", 403},
+		{"LAN client in allowed net", Options{AllowedNets: mustNets(t, "192.168.1.0/24"), AllowedHosts: []string{"192.168.1.20"}}, "GET", "192.168.1.50:5000", "192.168.1.20:8098", nil, "", 200},
+		{"ZeroTier client in allowed net", Options{AllowedNets: mustNets(t, "192.168.1.0/24", "10.147.0.0/16"), AllowedHosts: []string{"10.147.20.15"}}, "GET", "10.147.20.7:5000", "10.147.20.15:8098", nil, "", 200},
+		{"outside client refused", Options{AllowedNets: mustNets(t, "192.168.1.0/24", "10.147.0.0/16")}, "GET", "8.8.8.8:5000", "192.168.1.20:8098", nil, "", 403},
+		{"allowed client but unlisted Host", Options{AllowedNets: mustNets(t, "192.168.1.0/24")}, "GET", "192.168.1.50:5000", "192.168.1.20:8098", nil, "", 403},
 
 		{"password required", Options{Password: "s3cret"}, "GET", "127.0.0.1:5000", "localhost:8098", nil, "", 401},
 		{"wrong password", Options{Password: "s3cret"}, "GET", "127.0.0.1:5000", "localhost:8098", nil, "admin:nope", 401},

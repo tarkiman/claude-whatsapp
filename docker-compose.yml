@@ -3,8 +3,7 @@ services:
     image: aldinokemal2104/go-whatsapp-web-multidevice:latest
     container_name: claude-whatsapp-gowa
     restart: unless-stopped
-    # Webhook is configured via CLI flag, not env vars (matches the pattern
-    # used in event-organizer-ticketing / enterprise-ai-agent-platform).
+    # Webhook is configured via CLI flag, not env vars.
     command: >-
       rest
       --webhook=http://host.docker.internal:8099/webhook
