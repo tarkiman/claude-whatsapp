@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# Menyiapkan & menjalankan claude-whatsapp dari direktori ini (hasil ekstrak
-# rilis, atau checkout repo): membuat .env dengan secret acak, menjalankan
-# gowa via Docker Compose, lalu memasang service systemd --user (bridge +
-# admin UI). Pairing WhatsApp dan login akun Claude dilakukan sesudahnya dari
-# halaman admin — bukan di sini.
+# Sets up and starts claude-whatsapp from this directory (an extracted
+# release, or a repo checkout): creates .env with random secrets, starts gowa
+# with Docker Compose, then installs the systemd --user services (bridge +
+# admin UI). Pairing WhatsApp and signing in to Claude are done afterwards
+# from the admin UI — not here.
 #
-# Biasanya dipanggil oleh scripts/quick-install.sh; aman dijalankan ulang
-# (upgrade): .env yang sudah ada TIDAK diubah.
+# Normally called by scripts/quick-install.sh; safe to re-run (upgrade): an
+# existing .env is NOT modified.
 #
-# Pemakaian:
-#   scripts/install.sh [--allowed-senders <nomor[,nomor…]>] [--gowa-port <port>]
+# Usage:
+#   scripts/install.sh [--allowed-senders <number[,number…]>] [--gowa-port <port>]
 #                      [--non-interactive] [--skip-start]
 #
-#   --allowed-senders  nomor HP Anda (pengirim) dengan kode negara, mis.
-#                      6281234567890 atau 6281234567890@s.whatsapp.net.
-#                      Ditanyakan interaktif kalau tidak diberikan.
-#   --gowa-port        port gowa di host (default 3011)
-#   --non-interactive  jangan bertanya apa pun; gagal kalau ada yang wajib kosong
-#   --skip-start       cuma siapkan .env — jangan jalankan Docker/service
+#   --allowed-senders  your phone number (the sender) with country code, e.g.
+#                      6281234567890 or 6281234567890@s.whatsapp.net.
+#                      Asked interactively if not given.
+#   --gowa-port        gowa's port on the host (default 3011)
+#   --non-interactive  never prompt; fail if a required value is missing
+#   --skip-start       only prepare .env — don't start Docker/the services
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 log() { echo "==> $*"; }
-warn() { echo "PERINGATAN: $*" >&2; }
+warn() { echo "WARNING: $*" >&2; }
 die() {
 	echo "ERROR: $*" >&2
 	exit 1
@@ -36,12 +36,12 @@ SKIP_START=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--allowed-senders)
-		[ $# -ge 2 ] || die "--allowed-senders butuh nilai"
+		[ $# -ge 2 ] || die "--allowed-senders needs a value"
 		ALLOWED_SENDERS_ARG="$2"
 		shift 2
 		;;
 	--gowa-port)
-		[ $# -ge 2 ] || die "--gowa-port butuh nilai"
+		[ $# -ge 2 ] || die "--gowa-port needs a value"
 		GOWA_PORT_ARG="$2"
 		shift 2
 		;;
@@ -57,11 +57,11 @@ while [ $# -gt 0 ]; do
 		sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
-	*) die "argumen tidak dikenal: $1 (lihat --help)" ;;
+	*) die "unknown argument: $1 (see --help)" ;;
 	esac
 done
 
-[ "$EUID" -ne 0 ] || die "jalankan sebagai user biasa, bukan root/sudo — service systemd --user dan login 'claude' milik user itu"
+[ "$EUID" -ne 0 ] || die "run as a regular user, not root/sudo — the systemd --user services and the 'claude' login belong to that user"
 
 # ask reads from the real terminal even when this script's stdin is a pipe
 # (curl | bash), same trick scripts/quick-install.sh uses.
@@ -72,7 +72,7 @@ ask() {
 	elif ( exec 3</dev/tty ) 2>/dev/null; then
 		read -r -p "$prompt" answer </dev/tty
 	else
-		die "tidak ada terminal untuk bertanya — beri nilainya lewat flag (mis. --allowed-senders) atau pakai --non-interactive"
+		die "no terminal to ask on — pass the value as a flag (e.g. --allowed-senders) or use --non-interactive"
 	fi
 	printf '%s' "$answer"
 }
@@ -111,31 +111,31 @@ normalize_senders() {
 			continue
 		fi
 		digits="$(echo "$item" | tr -cd '0-9')"
-		[ -n "$digits" ] || die "nomor tidak valid: '$item'"
-		[[ "$digits" != 0* ]] || die "nomor '$item' diawali 0 — pakai kode negara (mis. 62812… bukan 0812…)"
-		[ "${#digits}" -ge 8 ] || die "nomor '$item' terlalu pendek — sertakan kode negara"
+		[ -n "$digits" ] || die "invalid number: '$item'"
+		[[ "$digits" != 0* ]] || die "number '$item' starts with 0 — use the country code (e.g. 62812… not 0812…)"
+		[ "${#digits}" -ge 8 ] || die "number '$item' is too short — include the country code"
 		out+="${out:+,}${digits}@s.whatsapp.net"
 	done
-	[ -n "$out" ] || die "ALLOWED_SENDERS kosong"
+	[ -n "$out" ] || die "ALLOWED_SENDERS is empty"
 	printf '%s' "$out"
 }
 
 # --- .env ------------------------------------------------------------------
 if [ -f .env ]; then
-	log ".env sudah ada — dipakai apa adanya (tidak diubah)."
+	log ".env already exists — keeping it as is (not modified)."
 else
-	[ -f .env.example ] || die ".env.example tidak ditemukan — jalankan dari direktori hasil ekstrak rilis / checkout repo"
+	[ -f .env.example ] || die ".env.example not found — run this from an extracted release / repo checkout"
 	senders="$ALLOWED_SENDERS_ARG"
 	if [ -z "$senders" ]; then
-		[ "$INTERACTIVE" -eq 1 ] || die "--allowed-senders wajib diisi bersama --non-interactive"
+		[ "$INTERACTIVE" -eq 1 ] || die "--allowed-senders is required together with --non-interactive"
 		echo
-		echo "Nomor WhatsApp yang boleh chat ke bot (nomor HP ANDA sendiri, pakai kode negara,"
-		echo "tanpa 0 di depan — mis. 6281234567890). Pisahkan dengan koma kalau lebih dari satu."
-		senders="$(ask "Nomor pengirim: ")"
+		echo "WhatsApp number allowed to chat with the bot (YOUR OWN phone number, with country"
+		echo "code, no leading 0 — e.g. 6281234567890). Separate several with commas."
+		senders="$(ask "Sender number: ")"
 	fi
 	senders="$(normalize_senders "$senders")"
 
-	log "Membuat .env dengan secret acak..."
+	log "Creating .env with random secrets..."
 	cp .env.example .env
 	chmod 600 .env
 	pass="$(random_hex 12)"
@@ -150,22 +150,22 @@ else
 fi
 
 if [ "$SKIP_START" -eq 1 ]; then
-	log "--skip-start: .env siap. Lanjutkan sendiri: docker compose up -d && scripts/deploy.sh"
+	log "--skip-start: .env is ready. Continue yourself: docker compose up -d && scripts/deploy.sh"
 	exit 0
 fi
 
 # --- prerequisites ------------------------------------------------------------
-command -v docker >/dev/null 2>&1 || die "Docker belum terpasang — https://docs.docker.com/engine/install/"
-docker compose version >/dev/null 2>&1 || die "plugin Docker Compose belum terpasang ('docker compose version' gagal)"
-docker info >/dev/null 2>&1 || die "tidak bisa bicara ke Docker daemon — pastikan daemon jalan dan user ini ada di grup docker (sudo usermod -aG docker \$USER, lalu login ulang)"
-command -v claude >/dev/null 2>&1 || die "Claude Code CLI ('claude') belum ada di PATH — npm install -g @anthropic-ai/claude-code (lihat README)"
-command -v systemctl >/dev/null 2>&1 || die "systemd tidak ditemukan — bridge dipasang sebagai service systemd --user"
+command -v docker >/dev/null 2>&1 || die "Docker is not installed — https://docs.docker.com/engine/install/"
+docker compose version >/dev/null 2>&1 || die "the Docker Compose plugin is not installed ('docker compose version' failed)"
+docker info >/dev/null 2>&1 || die "cannot talk to the Docker daemon — make sure it is running and this user is in the docker group (sudo usermod -aG docker \$USER, then log in again)"
+command -v claude >/dev/null 2>&1 || die "Claude Code CLI ('claude') is not on your PATH — npm install -g @anthropic-ai/claude-code (see the README)"
+command -v systemctl >/dev/null 2>&1 || die "systemd not found — the bridge is installed as a systemd --user service"
 
 # --- gowa + services ------------------------------------------------------------
-log "Menjalankan gowa (Docker Compose)..."
+log "Starting gowa (Docker Compose)..."
 docker compose up -d
 
-log "Memasang service bridge + admin (systemd --user)..."
+log "Installing the bridge + admin services (systemd --user)..."
 scripts/deploy.sh
 
 # --- wait for admin, then tell the user what is left ---------------------------
@@ -177,26 +177,26 @@ for _ in $(seq 1 20); do
 	fi
 	sleep 1
 done
-[ "${up:-0}" -eq 1 ] || warn "halaman admin belum menjawab — cek: systemctl --user status claude-whatsapp-admin.service"
+[ "${up:-0}" -eq 1 ] || warn "the admin page is not answering yet — check: systemctl --user status claude-whatsapp-admin.service"
 
 host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-claude_state="belum login"
+claude_state="not signed in"
 if claude auth status 2>/dev/null | grep -q '"loggedIn": *true'; then
-	claude_state="sudah login"
+	claude_state="signed in"
 fi
 
 cat <<EOF
 
-==> Terpasang. Tinggal dua langkah dari halaman admin:
+==> Installed. Two steps left, both from the admin page:
 
-  1. Buka $admin_url
-     (dari komputer lain: ssh -L 8098:127.0.0.1:8098 $(whoami)@${host_ip:-<ip-host>}
-      lalu buka http://localhost:8098 — atau ikuti panduan LAN/ZeroTier di .env.example)
+  1. Open $admin_url
+     (from another computer: ssh -L 8098:127.0.0.1:8098 $(whoami)@${host_ip:-<host-ip>}
+      then open http://localhost:8098 — or follow the LAN/ZeroTier notes in .env.example)
 
-  2. Kartu "WhatsApp recovery"  → Show pairing QR (atau Get code) → tautkan WhatsApp
-     Kartu "Sign in / switch Claude account" → akun Claude: $claude_state
-     (kalau "belum login", klik Sign in di kartu itu)
+  2. "WhatsApp recovery" card  → Show pairing QR (or Get code) → link WhatsApp
+     "Sign in / switch Claude account" card → Claude account: $claude_state
+     (if "not signed in", click Sign in on that card)
 
-  Lalu kirim pesan WhatsApp ke nomor yang baru ditautkan dari nomor pengirim di atas.
-  Status/log kapan saja: halaman admin yang sama.
+  Then send a WhatsApp message to the newly linked number from the sender number above.
+  Status and logs are on the same admin page at any time.
 EOF

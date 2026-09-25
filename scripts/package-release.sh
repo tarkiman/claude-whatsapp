@@ -4,14 +4,14 @@
 # .github/workflows/release.yml, and runnable locally to test an install
 # without publishing a release.
 #
-# Pemakaian:
-#   scripts/package-release.sh <versi> [arch...]      # arch: arm64 armv7 amd64
-#   scripts/package-release.sh v0.1.0                 # ketiganya
-#   scripts/package-release.sh dev arm64              # cuma satu, buat tes lokal
+# Usage:
+#   scripts/package-release.sh <version> [arch...]    # arch: arm64 armv7 amd64
+#   scripts/package-release.sh v0.1.0                 # all three
+#   scripts/package-release.sh dev arm64              # just one, for local testing
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${1:?pemakaian: $0 <versi> [arch...]}"
+VERSION="${1:?usage: $0 <version> [arch...]}"
 shift || true
 ARCHES=("$@")
 [ "${#ARCHES[@]}" -gt 0 ] || ARCHES=(arm64 armv7 amd64)
@@ -26,7 +26,7 @@ for arch in "${ARCHES[@]}"; do
 	armv7) goarch=arm goarm=7 ;;
 	amd64) goarch=amd64 goarm="" ;;
 	*)
-		echo "arch tidak dikenal: $arch (pilihan: arm64 armv7 amd64)" >&2
+		echo "unknown arch: $arch (choose from: arm64 armv7 amd64)" >&2
 		exit 1
 		;;
 	esac
@@ -41,7 +41,7 @@ for arch in "${ARCHES[@]}"; do
 			go build -trimpath -ldflags="-s -w" -o "$pkg/bin/$cmd" "./cmd/$cmd"
 	done
 
-	cp docker-compose.yml .env.example README.md "$pkg/"
+	cp docker-compose.yml .env.example README.md README.id.md LICENSE "$pkg/"
 	cp deploy/*.template "$pkg/deploy/"
 	cp scripts/install.sh scripts/deploy.sh scripts/setup-whisper.sh "$pkg/scripts/"
 	cp docs/ARCHITECTURE.md "$pkg/docs/"
