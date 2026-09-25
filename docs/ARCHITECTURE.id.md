@@ -81,7 +81,7 @@ sequenceDiagram
 
     B->>C: exec claude -p "<prompt>"<br/>--resume <prevSessionID><br/>--permission-mode auto<br/>cwd=$HOME
     activate C
-    Note over C: Baca ~/CLAUDE.md → kalau ada lampiran,<br/>Read file-nya langsung; kalau diminta kerja<br/>di repo tertentu, cd + baca memory repo itu
+    Note over C: Baca ~/CLAUDE.md → kalau ada lampiran,<br/>Read file-nya langsung, kalau diminta kerja<br/>di repo tertentu, cd + baca memory repo itu
     C-->>B: JSON {result, session_id, is_error}
     deactivate C
 
