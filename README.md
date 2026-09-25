@@ -260,4 +260,8 @@ claude-whatsapp/
 └── docs/                            # ARCHITECTURE.md, images/
 ```
 
+## Lisensi
+
+[MIT](LICENSE). Perangkat lunak ini disediakan apa adanya, tanpa jaminan apa pun — lihat juga [peringatan keamanan](#baca-ini-dulu-keamanan).
+
 Merilis versi baru: `git tag v0.x.0 && git push origin v0.x.0` — workflow menjalankan test lalu menerbitkan tarball yang diunduh `quick-install.sh`.
