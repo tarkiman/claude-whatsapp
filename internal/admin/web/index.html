@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude-WhatsApp Admin</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9; --card: #fff; --text: #1a1d21; --muted: #6a7280; --line: #e3e6ea;
+    --ok: #1a7f4b; --ok-bg: #e4f5ec; --warn: #9a6700; --warn-bg: #fff4d6;
+    --bad: #c0362c; --bad-bg: #fde8e6; --accent: #2457d6; --code: #eef0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101215; --card: #181b20; --text: #e6e8eb; --muted: #949ba7; --line: #2a2f37;
+      --ok: #4cc38a; --ok-bg: #12291f; --warn: #e3b341; --warn-bg: #2d2410;
+      --bad: #f2776d; --bad-bg: #331815; --accent: #6b93f5; --code: #22262d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 20px 16px 48px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 18px; margin: 0; flex: 1; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 10px; }
+  .pill { padding: 3px 12px; border-radius: 999px; font-weight: 600; font-size: 13px; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.degraded { background: var(--warn-bg); color: var(--warn); }
+  .pill.down { background: var(--bad-bg); color: var(--bad); }
+  .pill.unknown { background: var(--code); color: var(--muted); }
+  .muted { color: var(--muted); }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .grid .card { margin-bottom: 0; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+  .row span:last-child { text-align: right; overflow-wrap: anywhere; }
+  .row span:first-child { white-space: nowrap; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
+  ul.reasons { margin: 0 0 12px; padding: 10px 14px 10px 30px; border-radius: 10px; background: var(--warn-bg); color: var(--warn); }
+  ul.reasons.down { background: var(--bad-bg); color: var(--bad); }
+  button { font: inherit; padding: 6px 12px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--card); color: var(--text); cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--bad); border-color: var(--bad); }
+  input { font: inherit; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); width: 210px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0; }
+  #qrbox { text-align: center; padding: 8px 0; }
+  #qrbox img { width: 240px; height: 240px; background: #fff; padding: 8px; border-radius: 8px; image-rendering: pixelated; }
+  .code { font: 600 26px/1.2 ui-monospace, monospace; letter-spacing: .12em; padding: 8px 0; }
+  pre, code { background: var(--code); border-radius: 6px; font: 12.5px/1.5 ui-monospace, monospace; }
+  code { padding: 1px 5px; }
+  pre { padding: 10px 12px; margin: 8px 0 0; overflow: auto; max-height: 320px; white-space: pre-wrap; word-break: break-all; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 4px; }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  select { font: inherit; padding: 6px 10px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); }
+  #claude-steps { margin: 8px 0; padding-left: 20px; } #claude-steps li { margin: 6px 0; }
+  #claude-msg { min-height: 20px; margin: 4px 0; } #claude-msg.err { color: var(--bad); } #claude-msg.okmsg { color: var(--ok); }
+  #claude-code { width: 320px; }
+  #msg { min-height: 20px; margin: 4px 0; }
+  #msg.err { color: var(--bad); } #msg.okmsg { color: var(--ok); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Claude-WhatsApp</h1>
+    <span id="overall" class="pill unknown">checking…</span>
+    <span id="updated" class="muted"></span>
+  </header>
+
+  <ul id="reasons" class="reasons" hidden></ul>
+
+  <div class="grid">
+    <section class="card"><h2>Bridge</h2><div id="bridge"></div></section>
+    <section class="card"><h2>WhatsApp (gowa)</h2><div id="wa"></div></section>
+    <section class="card"><h2>Claude account</h2><div id="claude"></div></section>
+  </div>
+
+  <section class="card">
+    <h2>WhatsApp recovery</h2>
+    <p class="muted" style="margin-top:0">
+      <b>Reconnect</b> is the first thing to try if WhatsApp shows disconnected. To move to a
+      different number, <b>unlink</b> the current one and then pair the new one by QR or code.
+    </p>
+    <div class="actions">
+      <button id="btn-reconnect">Reconnect</button>
+      <button id="btn-qr" class="primary">Show pairing QR</button>
+      <span>
+        <input id="phone" inputmode="numeric" placeholder="62812… (pair by code)">
+        <button id="btn-code">Get code</button>
+      </span>
+      <button id="btn-logout" class="danger">Unlink WhatsApp…</button>
+    </div>
+    <div id="msg"></div>
+    <div id="pairing" hidden></div>
+  </section>
+
+  <section class="card">
+    <h2>Sign in / switch Claude account</h2>
+    <p style="margin-top:0">
+      The bridge runs <code>claude -p</code> as this Linux user, so it uses the Pi's single
+      Claude login. Signing in here changes it for <b>every</b> Claude Code session on this Pi,
+      not only the bridge. The bridge picks up the new login on the very next message — no restart needed.
+    </p>
+    <div class="actions">
+      <select id="claude-method">
+        <option value="claudeai">Claude subscription</option>
+        <option value="console">Anthropic Console (API billing)</option>
+      </select>
+      <button id="btn-claude-login" class="primary">Sign in…</button>
+      <button id="btn-claude-cancel" hidden>Cancel</button>
+    </div>
+    <div id="claude-msg"></div>
+    <ol id="claude-steps" hidden>
+      <li>Open <a id="claude-link" target="_blank" rel="noopener noreferrer">this sign-in link</a> on any device and sign in with the account you want.</li>
+      <li>Copy the code the page shows afterwards and paste it here:
+        <div class="actions">
+          <input id="claude-code" autocomplete="off" spellcheck="false" placeholder="paste code">
+          <button id="btn-claude-code">Submit code</button>
+        </div>
+      </li>
+    </ol>
+    <details>
+      <summary class="muted">Or do it from a terminal on the Pi</summary>
+      <pre>claude auth login --claudeai   # or --console for API billing</pre>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>Logs</h2>
+    <div class="tabs">
+      <button data-src="bridge" class="on">bridge</button>
+      <button data-src="gowa">gowa</button>
+    </div>
+    <pre id="log">loading…</pre>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const api = async (path, opts = {}) => {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { 'X-Admin-Request': '1', 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+};
+const post = (path, data = {}) => api(path, { method: 'POST', body: JSON.stringify(data) });
+
+function row(label, value, dot) {
+  const r = document.createElement('div'); r.className = 'row';
+  const l = document.createElement('span'); l.className = 'muted'; l.textContent = label;
+  const v = document.createElement('span');
+  if (dot) { const d = document.createElement('i'); d.className = 'dot ' + dot; v.append(d); }
+  v.append(String(value));
+  r.append(l, v); return r;
+}
+function fill(el, rows) { el.replaceChildren(...rows); }
+const yes = (b) => (b ? 'ok' : 'bad');
+
+let deviceId = '';
+let logSource = 'bridge';
+
+function render(s) {
+  const pill = $('overall');
+  pill.className = 'pill ' + s.overall;
+  pill.textContent = { ok: 'All good', degraded: 'Degraded', down: 'Down' }[s.overall] || s.overall;
+  $('updated').textContent = 'updated ' + new Date(s.time).toLocaleTimeString();
+
+  const rs = $('reasons');
+  rs.hidden = !(s.reasons && s.reasons.length);
+  rs.className = 'reasons' + (s.overall === 'down' ? ' down' : '');
+  rs.replaceChildren(...(s.reasons || []).map((t) => { const li = document.createElement('li'); li.textContent = t; return li; }));
+
+  const b = s.bridge;
+  fill($('bridge'), [
+    row('Service', b.active, b.active === 'active' ? 'ok' : 'bad'),
+    row('/health', b.healthOk ? 'ok' : (b.healthErr ? 'unreachable' : 'failing'), yes(b.healthOk)),
+    row('Since', b.since || '—'),
+    row('Chats', b.chats),
+    row('Pending queue', b.pending, b.pending ? 'warn' : 'ok'),
+  ]);
+
+  const w = s.whatsapp;
+  deviceId = w.deviceId || '';
+  fill($('wa'), [
+    row('gowa', w.reachable ? 'reachable' : 'unreachable', yes(w.reachable)),
+    row('Logged in', w.noDevice ? 'no device' : w.loggedIn ? 'yes' : 'no', yes(w.loggedIn)),
+    row('Connected', w.connected ? 'yes' : 'no', yes(w.connected)),
+    row('Number', (w.jid || '—').split('@')[0].split(':')[0]),
+    ...(w.containers || []).map((c) => row(c.name.includes('perms-fix') ? 'perms sidecar' : 'container', c.status, yes(c.up))),
+  ]);
+
+  const c = s.claude;
+  fill($('claude'), [
+    row('Logged in', c.loggedIn ? 'yes' : 'no', yes(c.loggedIn)),
+    row('Account', c.email || '—'),
+    row('Method', c.authMethod || '—'),
+    row('Plan', c.subscription || '—'),
+    ...(c.error ? [row('Error', c.error, 'bad')] : []),
+  ]);
+}
+
+async function refresh() {
+  try { render(await api('/api/status')); }
+  catch (e) { $('overall').className = 'pill down'; $('overall').textContent = 'Admin cannot reach backend'; }
+}
+
+async function loadLogs() {
+  try { $('log').textContent = (await api('/api/logs?source=' + logSource)).log || '(empty)'; }
+  catch (e) { $('log').textContent = 'error: ' + e.message; }
+}
+
+function say(text, kind) { const m = $('msg'); m.textContent = text; m.className = kind || ''; }
+
+async function act(btn, fn) {
+  btn.disabled = true; say('');
+  try { await fn(); } catch (e) { say(e.message, 'err'); }
+  finally { btn.disabled = false; }
+}
+
+let qrTimer = null, pollTimer = null;
+function stopPairing() {
+  clearInterval(qrTimer); clearInterval(pollTimer);
+  const p = $('pairing'); p.hidden = true; p.replaceChildren();
+}
+function watchLogin(id) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const st = await api('/api/wa/status?device_id=' + encodeURIComponent(id));
+      if (st.is_logged_in) { stopPairing(); say('WhatsApp paired and logged in.', 'okmsg'); refresh(); }
+    } catch (_) { /* keep polling */ }
+  }, 3000);
+}
+
+$('btn-reconnect').onclick = (e) => act(e.target, async () => {
+  await post('/api/wa/reconnect', { deviceId });
+  say('Reconnect requested — status refreshes in a few seconds.', 'okmsg');
+  setTimeout(refresh, 4000);
+});
+
+$('btn-qr').onclick = (e) => act(e.target, async () => {
+  stopPairing();
+  const r = await post('/api/wa/qr', { deviceId });
+  deviceId = r.deviceId;
+  const box = $('pairing'); box.hidden = false;
+  const wrap = document.createElement('div'); wrap.id = 'qrbox';
+  const img = document.createElement('img'); img.src = r.image + '&t=' + Date.now(); img.alt = 'WhatsApp pairing QR';
+  const note = document.createElement('div'); note.className = 'muted';
+  wrap.append(img, note); box.replaceChildren(wrap);
+  let left = r.duration || 30;
+  note.textContent = 'WhatsApp → Linked devices → Link a device. Expires in ' + left + 's';
+  qrTimer = setInterval(() => {
+    left -= 1;
+    if (left <= 0) { clearInterval(qrTimer); note.textContent = 'QR expired — press “Show pairing QR” again.'; return; }
+    note.textContent = 'WhatsApp → Linked devices → Link a device. Expires in ' + left + 's';
+  }, 1000);
+  watchLogin(r.deviceId);
+});
+
+$('btn-code').onclick = (e) => act(e.target, async () => {
+  stopPairing();
+  const r = await post('/api/wa/pair-code', { deviceId, phone: $('phone').value });
+  deviceId = r.deviceId;
+  const box = $('pairing'); box.hidden = false;
+  const code = document.createElement('div'); code.className = 'code'; code.textContent = r.code;
+  const note = document.createElement('div'); note.className = 'muted';
+  note.textContent = 'On that phone: WhatsApp → Linked devices → Link a device → Link with phone number instead.';
+  box.replaceChildren(code, note);
+  watchLogin(r.deviceId);
+});
+
+$('btn-logout').onclick = (e) => act(e.target, async () => {
+  if (!confirm('Unlink WhatsApp? The bot stops answering until you pair a device again.')) return;
+  stopPairing();
+  await post('/api/wa/logout', { deviceId, confirm: 'LOGOUT' });
+  say('Unlinked. Use “Show pairing QR” or “Get code” to pair the new number.', 'okmsg');
+  refresh();
+});
+
+document.querySelectorAll('.tabs button').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
+    logSource = b.dataset.src; loadLogs();
+  };
+});
+
+// --- Claude sign-in ---
+let claudePoll = null;
+const cmsg = (t, k) => { const m = $('claude-msg'); m.textContent = t; m.className = k || ''; };
+
+function renderLogin(l) {
+  const active = l.state === 'waiting_code' || l.state === 'verifying';
+  $('claude-steps').hidden = l.state !== 'waiting_code' && l.state !== 'verifying';
+  $('btn-claude-cancel').hidden = !active;
+  $('btn-claude-login').disabled = active;
+  $('btn-claude-code').disabled = l.state === 'verifying';
+  if (l.url) { $('claude-link').href = l.url; }
+  if (l.state === 'waiting_code') cmsg('Waiting for the code…');
+  if (l.state === 'verifying') cmsg('Verifying the code…');
+  if (l.state === 'done') { cmsg('Signed in. The bridge will use this account from the next message.', 'okmsg'); refresh(); }
+  if (l.state === 'failed') {
+    const tail = (l.output || []).slice(-3).join(' ');
+    cmsg((l.error || 'Sign-in failed') + (tail ? ' — ' + tail : ''), 'err');
+  }
+  if (!active) { clearInterval(claudePoll); claudePoll = null; }
+}
+function watchClaudeLogin() {
+  if (claudePoll) return;
+  claudePoll = setInterval(async () => {
+    try { renderLogin(await api('/api/claude/login')); } catch (_) { /* keep polling */ }
+  }, 2000);
+}
+
+$('btn-claude-login').onclick = async (e) => {
+  e.target.disabled = true; cmsg('Starting…'); $('claude-code').value = '';
+  try {
+    const l = await post('/api/claude/login/start', { method: $('claude-method').value });
+    renderLogin(l); watchClaudeLogin();
+  } catch (err) { cmsg(err.message, 'err'); e.target.disabled = false; }
+};
+$('btn-claude-code').onclick = async () => {
+  try {
+    const l = await post('/api/claude/login/code', { code: $('claude-code').value });
+    $('claude-code').value = '';
+    renderLogin(l); watchClaudeLogin();
+  } catch (err) { cmsg(err.message, 'err'); }
+};
+$('btn-claude-cancel').onclick = async () => {
+  await post('/api/claude/login/cancel').catch(() => {});
+  cmsg('Cancelled.'); renderLogin({ state: 'idle' });
+};
+api('/api/claude/login').then((l) => { if (l.state === 'waiting_code' || l.state === 'verifying') { renderLogin(l); watchClaudeLogin(); } }).catch(() => {});
+
+refresh(); loadLogs();
+setInterval(refresh, 10000);
+setInterval(loadLogs, 30000);
+</script>
+</body>
+</html>
