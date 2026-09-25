@@ -105,8 +105,8 @@
   <section class="card">
     <h2>Sign in / switch Claude account</h2>
     <p style="margin-top:0">
-      The bridge runs <code>claude -p</code> as this Linux user, so it uses the Pi's single
-      Claude login. Signing in here changes it for <b>every</b> Claude Code session on this Pi,
+      The bridge runs <code>claude -p</code> as this Linux user, so it uses this machine's single
+      Claude login. Signing in here changes it for <b>every</b> Claude Code session on this machine,
       not only the bridge. The bridge picks up the new login on the very next message — no restart needed.
     </p>
     <div class="actions">
@@ -128,7 +128,7 @@
       </li>
     </ol>
     <details>
-      <summary class="muted">Or do it from a terminal on the Pi</summary>
+      <summary class="muted">Or do it from a terminal on this machine</summary>
       <pre>claude auth login --claudeai   # or --console for API billing</pre>
     </details>
   </section>

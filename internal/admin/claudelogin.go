@@ -119,7 +119,7 @@ func (s *Server) startLogin(method string) (LoginSnapshot, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), loginMaxAge)
 	cmd := exec.CommandContext(ctx, s.cfg.ClaudeBin, "auth", "login", flag)
-	// Never try to pop a browser open on the Pi's own desktop; the operator
+	// Never try to pop a browser open on the host's own desktop; the operator
 	// opens the link on their own device.
 	cmd.Env = append(cmd.Environ(), "DISPLAY=", "WAYLAND_DISPLAY=", "BROWSER=true")
 

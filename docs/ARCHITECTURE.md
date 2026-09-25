@@ -28,7 +28,7 @@ flowchart LR
     Claude["🤖 claude CLI\n-p --resume <session>"]
     Store[("sessions.json\nchat_id → session_id")]
     Pending[("pending/*.json\nantrian durable")]
-    FS[("Filesystem\n~/repository/*\n~/CLAUDE.md, memory/")]
+    FS[("Filesystem\nWORK_DIR, CLAUDE.md, memory/")]
 
     Phone <-->|"pesan WhatsApp"| WA
     WA <-->|"whatsmeow\n(linked device)"| Gowa
@@ -122,9 +122,12 @@ sequenceDiagram
 ```
 claude-whatsapp/
 ├── cmd/bridge/main.go          # entrypoint: wiring komponen, replay pending saat startup, HTTP server
+├── cmd/admin/main.go           # entrypoint Admin UI — lihat §16
 ├── internal/
 │   ├── config/config.go        # baca .env, validasi (ALLOWED_SENDERS & WEBHOOK_SECRET wajib)
 │   ├── gowa/client.go          # REST client tipis ke gowa (SendMessage, SetChatPresence, React)
+│   ├── gowa/admin.go           # operasi device untuk Admin UI (status, QR, pair code, logout)
+│   ├── admin/                  # Admin UI: handler, guard jaringan, login Claude, web/index.html — §16
 │   ├── webhook/
 │   │   ├── handler.go          # verifikasi HMAC, filter, orkestrasi satu siklus pesan
 │   │   ├── media.go            # parsing field lampiran polimorfik + buildPrompt()
@@ -134,8 +137,11 @@ claude-whatsapp/
 │   ├── pending/store.go        # antrian durable, thread-safe lewat rename atomik
 │   └── transcribe/whisper.go   # exec whisper-cli untuk transkripsi voice note — lihat §7.1
 ├── docker-compose.yml          # gowa + sidecar gowa-media-perms-fix
-├── deploy/claude-whatsapp.service.template   # unit systemd --user (placeholder path/PATH)
-├── scripts/deploy.sh           # build + generate unit dari template + install, idempotent
+├── deploy/*.service.template   # unit systemd --user bridge & admin (placeholder path/PATH)
+├── scripts/quick-install.sh    # installer satu-baris — lihat §16
+├── scripts/install.sh          # .env + gowa + service
+├── scripts/package-release.sh  # cross-compile + tarball rilis
+├── scripts/deploy.sh           # build/pakai bin/ + generate unit dari template + install, idempotent
 ├── scripts/setup-whisper.sh    # build whisper.cpp + download model (opsional)
 └── .env.example                # semua env var terdokumentasi
 ```
@@ -240,6 +246,7 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 - **Allowlist pengirim**: `ALLOWED_SENDERS` (env var, wajib diisi — bridge menolak start kalau kosong) membatasi siapa saja yang pesannya diproses. Ini nomor HP **pengirim** (`payload.from`), bukan nomor device bridge sendiri.
 - **Basic auth ke gowa**: bridge otentikasi ke REST API gowa pakai `GOWA_BASIC_AUTH_USER/PASSWORD` yang sama dengan yang dipasang di gowa lewat flag `--basic-auth`.
 - **Permission Claude**: subprocess `claude -p` dijalankan dengan `--permission-mode auto` (classifier permission Claude Code bawaan, bukan `--dangerously-skip-permissions`) — tool call yang berisiko tetap butuh persetujuan/diblokir sesuai kebijakan auto-mode yang sama seperti sesi interaktif biasa.
+- **Admin UI**: default hanya `127.0.0.1`. Bind ke alamat lain wajib menyebut IP spesifik (`0.0.0.0` ditolak) dan `ADMIN_ALLOWED_NETS`; IP klien di luar daftar itu ditolak sebelum request diproses. Opsional `ADMIN_PASSWORD` (basic auth). Header `Host` divalidasi (anti DNS-rebinding), POST wajib membawa header `X-Admin-Request` dan `Origin` yang sama (anti-CSRF), dan proxy gambar QR dibatasi ke direktori QR gowa. Kode OAuth yang ditempel saat login Claude tidak disimpan dan di-redact dari output. Lihat §16.
 - **Secrets**: `.env` (berisi `WEBHOOK_SECRET`, password gowa) di-`.gitignore`, tidak pernah masuk git. `.env.example` cuma placeholder.
 - **Bukan sandbox**: proses `claude -p` jalan sebagai user Linux biasa yang menjalankan bridge — akses filesystem/perintahnya sama persis dengan yang dimiliki user itu di mesin tersebut. Kalau user itu punya `sudo` tanpa password (umum di setup single-user seperti Raspberry Pi pribadi), Claude yang dipicu lewat WhatsApp juga bisa menjalankan `sudo` — dan ini **benar-benar terjadi** saat implementasi §7.1 (`apt-get install cmake`, `mkdir`/`chown` untuk `data/whisper/` semuanya lewat `sudo` tanpa password, dipicu dari pesan WhatsApp). `--permission-mode auto` adalah jaring pengaman heuristik (classifier bawaan Claude Code), **bukan** batas keamanan formal seperti container terisolasi — pertimbangkan ini sebelum memberi bridge akses ke akun dengan privilese luas.
 
@@ -269,6 +276,10 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 | `FFMPEG_BIN` | bridge | `ffmpeg` | Untuk normalisasi Opus-in-Ogg → WAV sebelum transkripsi |
 | `WHISPER_LANG` | bridge | `auto` | Kode bahasa whisper, atau `auto` untuk deteksi per-klip |
 | `GOWA_PORT` | docker-compose | `3011` | Port host untuk gowa |
+| `ADMIN_ADDR` | admin | `127.0.0.1:8098` | Daftar `host:port` (pisah koma) tempat Admin UI listen. Non-loopback wajib IP spesifik + `ADMIN_ALLOWED_NETS`. Alamat yang belum ada saat boot dicoba ulang tiap 5 detik |
+| `ADMIN_ALLOWED_NETS` | admin | (kosong) | CIDR klien yang boleh konek, pisah koma (loopback selalu boleh). **Wajib** kalau `ADMIN_ADDR` berisi alamat non-loopback |
+| `ADMIN_ALLOWED_HOSTS` | admin | (kosong) | Nama `Host` tambahan yang diterima (host dari `ADMIN_ADDR` otomatis) |
+| `ADMIN_PASSWORD` | admin | (kosong) | Kalau diisi, semua request butuh basic auth (user `admin`) |
 
 ## 14. Deployment & persistence
 
@@ -289,4 +300,22 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 | `/app/login-with-code` | GET | Minta kode pairing — perlu `?device_id=` walau endpoint "legacy" |
 | `/app/status` | GET | Cek status login sesungguhnya (`is_logged_in`) — lebih bisa dipercaya dari field `state` di `/devices/{id}` |
 
-Detail lengkap format payload webhook: `~/repository/go-whatsapp-web-multidevice/docs/webhook-payload.md` (clone lokal repo gowa).
+Detail lengkap format payload webhook: `docs/webhook-payload.md` di [repo gowa](https://github.com/aldinokemal/go-whatsapp-web-multidevice).
+
+## 16. Admin UI & installer
+
+**Admin UI** (`cmd/admin`, `internal/admin`) adalah proses terpisah dari bridge — unit systemd sendiri (`claude-whatsapp-admin.service`) — supaya tetap bisa dibuka justru saat bridge yang mati. Satu halaman statis (`web/index.html`, di-embed lewat `go:embed`, tanpa dependency frontend) yang memanggil `/api/*`:
+
+| Endpoint | Fungsi |
+|---|---|
+| `GET /api/status` | Gabungan: unit systemd bridge + `/health`, antrian pending, jumlah chat, container Docker, status device gowa (`/app/status`), dan `claude auth status`. Menghasilkan verdict `ok` / `degraded` / `down` beserta alasannya |
+| `GET /api/logs` | `journalctl` bridge atau `docker logs` gowa |
+| `POST /api/wa/qr`, `GET /api/wa/qr.png`, `POST /api/wa/pair-code` | Pairing WhatsApp. Kalau gowa belum punya device, satu device baru dibuat otomatis |
+| `POST /api/wa/reconnect`, `POST /api/wa/logout` | Pemulihan koneksi / unlink (logout wajib membawa `confirm: "LOGOUT"`) |
+| `GET/POST /api/claude/login[/start\|/code\|/cancel]` | Login Claude — lihat di bawah |
+
+Catatan perilaku gowa yang memengaruhi desainnya: daftar device diambil dari `GET /devices` (bukan `/app/devices`, yang menjawab 400 saat registry kosong), dan `/app/logout` pada sesi yang sudah mati tetap menghapus record device tetapi lalu mengembalikan error — Admin UI menganggapnya sukses selama device-nya hilang sesudahnya.
+
+**Login Claude dari UI** menjalankan `claude auth login --claudeai|--console` sebagai subprocess dengan stdin pipe, mengambil URL `https://…` pertama dari outputnya, lalu menulis kode yang ditempel operator ke stdin (prompt `Paste code here if prompted >`). PKCE verifier tidak pernah keluar dari proses `claude`. Hanya satu sesi login aktif sekaligus, dibatasi 10 menit, dan tiap run diberi nomor generasi supaya proses lama yang baru selesai tidak menimpa state run baru. Kredensial `claude` berlaku untuk seluruh user Linux (semua sesi Claude Code), bukan hanya bridge. Alur ini diuji dengan skrip `claude` tiruan yang meniru transkrip CLI; jika format output CLI berubah di versi mendatang, jalur cadangannya tetap `claude auth login` di terminal.
+
+**Installer.** `scripts/quick-install.sh` (`curl | bash`) mengunduh tarball rilis untuk arsitektur mesin (arm64 / armv7 / amd64), mengekstraknya ke `~/claude-whatsapp` (menjalankan ulang = upgrade: `.env` dan `data/` tidak disentuh), lalu memanggil `scripts/install.sh`: membuat `.env` (secret acak, `chmod 600`, nomor pengirim dinormalisasi ke JID), `docker compose up -d`, dan `scripts/deploy.sh` yang memasang unit systemd memakai binary siap pakai di `bin/`. Tarball dibuat `scripts/package-release.sh` (pure Go, `CGO_ENABLED=0`) oleh workflow `.github/workflows/release.yml` saat tag `v*` di-push. Pairing WhatsApp dan login Claude sengaja tidak dilakukan installer — keduanya dikerjakan dari Admin UI.
