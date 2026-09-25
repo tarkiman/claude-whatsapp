@@ -1,4 +1,10 @@
 .env
+.env.*
+!.env.example
 /bin/
 /data/
 /dist/
+*.sqlite
+*.sqlite-*
+*.db
+*.log
