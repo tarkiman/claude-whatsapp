@@ -1,0 +1,35 @@
+name: Release
+
+# Triggered by pushing a version tag (git tag v0.1.0 && git push origin v0.1.0).
+# Cross-compiles bridge + admin for arm64 / armv7 / amd64 (pure Go, no CGO)
+# and publishes one tarball per architecture — the assets
+# scripts/quick-install.sh downloads. No Go toolchain needed on the target.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Package release tarballs
+        run: scripts/package-release.sh "${GITHUB_REF_NAME}"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true
