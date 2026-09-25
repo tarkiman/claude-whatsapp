@@ -1,36 +1,38 @@
-# Arsitektur `claude-whatsapp`
+# `claude-whatsapp` architecture
 
-Dokumen ini adalah referensi teknis lengkap: komponen, alur data, sequence diagram, model keamanan, dan keputusan desain — untuk siapa pun (termasuk sesi Claude Code di masa depan) yang perlu memahami sistem ini tanpa harus membaca ulang seluruh riwayat pengembangannya.
+**English** · [Bahasa Indonesia](ARCHITECTURE.id.md)
 
-## 1. Ringkasan
+This document is the complete technical reference: components, data flow, sequence diagrams, the security model and design decisions — for anyone (including a future Claude Code session) who needs to understand the system without re-reading its whole development history.
 
-`claude-whatsapp` menghubungkan WhatsApp ke Claude Code: pesan masuk dari WhatsApp memicu satu panggilan `claude -p`, hasilnya dikirim balik sebagai balasan WhatsApp. Tidak ada proses interaktif yang harus dijaga hidup — setiap pesan ditangani sebagai satu request/response, dengan kontinuitas percakapan dijaga lewat `--resume <session-id>`.
+## 1. Overview
 
-Dibangun 2026-08-28, satu-satunya integrasi WhatsApp↔Claude Code yang aktif di Pi ini.
+`claude-whatsapp` connects WhatsApp to Claude Code: an incoming WhatsApp message triggers one `claude -p` call, and the result is sent back as a WhatsApp reply. There is no interactive process to keep alive — every message is handled as a single request/response, with conversation continuity maintained through `--resume <session-id>`.
 
-## 2. Komponen
+Built on 2026-08-28 and developed and used day to day on a Raspberry Pi 5.
 
-| Komponen | Teknologi | Peran |
+## 2. Components
+
+| Component | Technology | Role |
 |---|---|---|
-| **gowa** | Go + [whatsmeow](https://github.com/tulir/whatsmeow), Docker | Pegang koneksi WhatsApp (linked device) yang sesungguhnya. Kirim webhook saat pesan masuk, terima perintah kirim-pesan lewat REST API. |
-| **gowa-media-perms-fix** | Alpine, sidecar Docker | Melonggarkan permission file lampiran yang di-*auto-download* gowa (ditulis `0600` milik uid container, tidak terbaca bridge tanpa ini) — lihat [§7](#7-lampiran-media). |
-| **bridge** | Go (custom, repo ini) | HTTP server headless. Terima webhook dari gowa, jalankan `claude -p`, kirim balasan lewat REST API gowa. |
-| **claude CLI** | `@anthropic-ai/claude-code` (npm) | Otak sesungguhnya — satu subprocess call per pesan, mode print (`-p`), di-*resume* per `chat_id`. |
-| **sessions.json** | File JSON lokal | Peta `chat_id → claude session_id`, supaya panggilan `claude -p` berikutnya untuk chat yang sama pakai `--resume`. |
-| **pending/*.json** | File JSON lokal | Antrian durable — satu file per pesan yang sudah di-ack ke gowa tapi belum selesai dibalas. Lihat [§8](#8-durability-pesan). |
+| **gowa** | Go + [whatsmeow](https://github.com/tulir/whatsmeow), Docker | Holds the actual WhatsApp connection (linked device). Fires a webhook when a message arrives, accepts send-message commands over its REST API. |
+| **gowa-media-perms-fix** | Alpine, Docker sidecar | Loosens permissions on attachment files that gowa auto-downloads (written `0600` and owned by the container's uid, unreadable by the bridge without this) — see [§7](#7-media-attachments). |
+| **bridge** | Go (custom, this repo) | Headless HTTP server. Receives webhooks from gowa, runs `claude -p`, sends the reply through gowa's REST API. |
+| **claude CLI** | `@anthropic-ai/claude-code` (npm) | The actual brain — one subprocess call per message, print mode (`-p`), resumed per `chat_id`. |
+| **sessions.json** | Local JSON file | Map of `chat_id → claude session_id`, so the next `claude -p` call for the same chat uses `--resume`. |
+| **pending/*.json** | Local JSON files | Durable queue — one file per message that was acked to gowa but not yet answered. See [§8](#8-message-durability). |
 
 ```mermaid
 flowchart LR
-    Phone["📱 HP Pengguna\n(WhatsApp)"]
+    Phone["📱 User's phone\n(WhatsApp)"]
     WA[("WhatsApp\nServers")]
     Gowa["🐳 gowa\nDocker · :3011\ncontainer: claude-whatsapp-gowa"]
     Bridge["🌉 bridge\nGo · systemd · :8099\nclaude-whatsapp.service"]
     Claude["🤖 claude CLI\n-p --resume <session>"]
     Store[("sessions.json\nchat_id → session_id")]
-    Pending[("pending/*.json\nantrian durable")]
+    Pending[("pending/*.json\ndurable queue")]
     FS[("Filesystem\nWORK_DIR, CLAUDE.md, memory/")]
 
-    Phone <-->|"pesan WhatsApp"| WA
+    Phone <-->|"WhatsApp messages"| WA
     WA <-->|"whatsmeow\n(linked device)"| Gowa
     Gowa -->|"POST /webhook\n(HMAC-signed)"| Bridge
     Bridge -->|"POST /send/message\nPOST /send/chat-presence"| Gowa
@@ -45,12 +47,12 @@ flowchart LR
     style Claude fill:#D97757,color:#fff
 ```
 
-## 3. Sequence diagram — satu siklus pesan
+## 3. Sequence diagram — one message cycle
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor U as Pengguna<br/>(WhatsApp)
+    actor U as User<br/>(WhatsApp)
     participant W as WhatsApp<br/>Servers
     participant G as gowa<br/>(Docker)
     participant B as bridge<br/>(Go)
@@ -58,46 +60,46 @@ sequenceDiagram
     participant P as pending/*.json
     participant S as sessions.json
 
-    U->>W: Kirim pesan (teks/media)
+    U->>W: Send message (text/media)
     W->>G: Deliver (whatsmeow)
-    G->>B: POST /webhook<br/>event=message, HMAC di header X-Hub-Signature-256
+    G->>B: POST /webhook<br/>event=message, HMAC in X-Hub-Signature-256 header
     activate B
-    B->>B: Verifikasi HMAC · filter (is_from_me, allowlist)
-    B->>B: buildPrompt() — gabung body/caption +<br/>instruksi lampiran kalau ada (lihat §7)
+    B->>B: Verify HMAC · filter (is_from_me, allowlist)
+    B->>B: buildPrompt() — combine body/caption +<br/>attachment instructions if any (see §7)
     B->>P: Write(message_id, prompt, ...)
-    Note over P: Ditulis SEBELUM ack — kalau bridge mati<br/>persis setelah ack, ini yang jadi bukti untuk direplay
-    B-->>G: 200 OK (ack, wajib <10s)
+    Note over P: Written BEFORE the ack — if the bridge dies<br/>right after the ack, this is the evidence to replay
+    B-->>G: 200 OK (ack, must be <10s)
     deactivate B
-    Note over B: Sisanya jalan async<br/>(goroutine terpisah dari HTTP response)
+    Note over B: The rest runs async<br/>(goroutine separate from the HTTP response)
 
-    B->>B: Lock(chat_id) — tunggu giliran kalau ada<br/>pesan lain untuk chat ini sedang diproses (lihat §9)
+    B->>B: Lock(chat_id) — wait for our turn if another<br/>message for this chat is being processed (see §9)
     B->>G: POST /send/chat-presence<br/>{action: "start"}
-    G->>W: Tampilkan "mengetik…"
+    G->>W: Show "typing…"
 
     B->>S: Get(chat_id)
-    S-->>B: prevSessionID (atau kosong)
+    S-->>B: prevSessionID (or empty)
 
     B->>C: exec claude -p "<prompt>"<br/>--resume <prevSessionID><br/>--permission-mode auto<br/>cwd=$HOME
     activate C
-    Note over C: Baca ~/CLAUDE.md → kalau ada lampiran,<br/>Read file-nya langsung; kalau diminta kerja<br/>di repo tertentu, cd + baca memory repo itu
+    Note over C: Reads ~/CLAUDE.md → for attachments,<br/>Reads the file directly; if asked to work in a<br/>specific repo, cd + read that repo's memory
     C-->>B: JSON {result, session_id, is_error}
     deactivate C
 
-    alt is_error atau exec gagal, DAN ada prevSessionID
-        B->>C: Retry: exec claude -p "<prompt>" (tanpa --resume)
+    alt is_error or exec failed, AND there is a prevSessionID
+        B->>C: Retry: exec claude -p "<prompt>" (without --resume)
         C-->>B: JSON {result, session_id}
     end
 
-    B->>S: Set(chat_id, session_id baru)
+    B->>S: Set(chat_id, new session_id)
     B->>G: POST /send/chat-presence<br/>{action: "stop"}
     B->>G: POST /send/message<br/>{phone: chat_id, message: result}
-    G->>W: Kirim balasan
-    W->>U: Terima balasan
-    B->>P: Done(message_id) — hapus, sudah terjawab
-    B->>B: Unlock(chat_id) — giliran pesan berikutnya
+    G->>W: Send reply
+    W->>U: Receive reply
+    B->>P: Done(message_id) — delete, answered
+    B->>B: Unlock(chat_id) — next message's turn
 ```
 
-## 4. Startup — replay pesan pending
+## 4. Startup — replaying pending messages
 
 ```mermaid
 sequenceDiagram
@@ -107,215 +109,215 @@ sequenceDiagram
     participant H as webhook.Handler
 
     M->>P: ListAll()
-    alt ada file tersisa (bridge mati di tengah proses sebelumnya)
+    alt files left over (the bridge died mid-processing last time)
         P-->>M: []Message
-        loop tiap pesan
+        loop each message
             M->>H: go Replay(msg)
-            Note over H: Persis alur normal dari §3 — termasuk Lock(chat_id),<br/>jadi 2+ pesan chat yang sama tetap antre, tidak race
+            Note over H: Exactly the normal flow from §3 — including Lock(chat_id),<br/>so 2+ messages for the same chat still queue, no race
         end
     end
-    M->>M: mulai HTTP server (/webhook, /health)
+    M->>M: start HTTP server (/webhook, /health)
 ```
 
-## 5. Struktur kode
+## 5. Code layout
 
 ```
 claude-whatsapp/
-├── cmd/bridge/main.go          # entrypoint: wiring komponen, replay pending saat startup, HTTP server
-├── cmd/admin/main.go           # entrypoint Admin UI — lihat §16
+├── cmd/bridge/main.go          # entrypoint: wires components, replays pending on startup, HTTP server
+├── cmd/admin/main.go           # Admin UI entrypoint — see §16
 ├── internal/
-│   ├── config/config.go        # baca .env, validasi (ALLOWED_SENDERS & WEBHOOK_SECRET wajib)
-│   ├── gowa/client.go          # REST client tipis ke gowa (SendMessage, SetChatPresence, React)
-│   ├── gowa/admin.go           # operasi device untuk Admin UI (status, QR, pair code, logout)
-│   ├── admin/                  # Admin UI: handler, guard jaringan, login Claude, web/index.html — §16
+│   ├── config/config.go        # read .env, validate (ALLOWED_SENDERS & WEBHOOK_SECRET required)
+│   ├── gowa/client.go          # thin REST client for gowa (SendMessage, SetChatPresence, React)
+│   ├── gowa/admin.go           # device operations for the Admin UI (status, QR, pair code, logout)
+│   ├── admin/                  # Admin UI: handlers, network guard, Claude login, web/index.html — §16
 │   ├── webhook/
-│   │   ├── handler.go          # verifikasi HMAC, filter, orkestrasi satu siklus pesan
-│   │   ├── media.go            # parsing field lampiran polimorfik + buildPrompt()
-│   │   └── chatlock.go         # kunci per chat_id — lihat §9
-│   ├── claude/runner.go        # exec `claude -p`, parse JSON, retry tanpa --resume kalau gagal
-│   ├── session/store.go        # chat_id → session_id, persisted ke JSON, thread-safe (mutex)
-│   ├── pending/store.go        # antrian durable, thread-safe lewat rename atomik
-│   └── transcribe/whisper.go   # exec whisper-cli untuk transkripsi voice note — lihat §7.1
-├── docker-compose.yml          # gowa + sidecar gowa-media-perms-fix
-├── deploy/*.service.template   # unit systemd --user bridge & admin (placeholder path/PATH)
-├── scripts/quick-install.sh    # installer satu-baris — lihat §16
-├── scripts/install.sh          # .env + gowa + service
-├── scripts/package-release.sh  # cross-compile + tarball rilis
-├── scripts/deploy.sh           # build/pakai bin/ + generate unit dari template + install, idempotent
-├── scripts/setup-whisper.sh    # build whisper.cpp + download model (opsional)
-└── .env.example                # semua env var terdokumentasi
+│   │   ├── handler.go          # HMAC verification, filtering, orchestration of one message cycle
+│   │   ├── media.go            # polymorphic attachment field parsing + buildPrompt()
+│   │   └── chatlock.go         # per-chat_id lock — see §9
+│   ├── claude/runner.go        # exec `claude -p`, parse JSON, retry without --resume on failure
+│   ├── session/store.go        # chat_id → session_id, persisted to JSON, thread-safe (mutex)
+│   ├── pending/store.go        # durable queue, thread-safe via atomic rename
+│   └── transcribe/whisper.go   # exec whisper-cli for voice-note transcription — see §7.1
+├── docker-compose.yml          # gowa + gowa-media-perms-fix sidecar
+├── deploy/*.service.template   # systemd --user units for bridge & admin (path/PATH placeholders)
+├── scripts/quick-install.sh    # one-line installer — see §16
+├── scripts/install.sh          # .env + gowa + services
+├── scripts/package-release.sh  # cross-compile + release tarballs
+├── scripts/deploy.sh           # build/use bin/ + generate units from templates + install, idempotent
+├── scripts/setup-whisper.sh    # build whisper.cpp + download model (optional)
+└── .env.example                # every env var, documented
 ```
 
-Alur import: `main.go` → `webhook.Handler` → (`gowa.Client`, `claude.Runner`, `session.Store`, `pending.Store`, `transcribe.Transcriber`). Tidak ada dependency siklik; tiap package `internal/*` berdiri sendiri.
+Import flow: `main.go` → `webhook.Handler` → (`gowa.Client`, `claude.Runner`, `session.Store`, `pending.Store`, `transcribe.Transcriber`). There are no cyclic dependencies; every `internal/*` package stands on its own.
 
-## 6. Model kontinuitas sesi
+## 6. Session continuity model
 
-Setiap `chat_id` WhatsApp punya satu "utas" percakapan Claude Code yang terus di-*resume*:
+Every WhatsApp `chat_id` has one Claude Code conversation "thread" that keeps being resumed:
 
-1. Pesan pertama dari suatu chat → `claude -p "<prompt>"` tanpa `--resume` → Claude membuat sesi baru, `session_id` dikembalikan di JSON output.
-2. `session_id` disimpan ke `sessions.json` dengan key `chat_id`.
-3. Pesan berikutnya dari chat yang sama → `claude -p "<prompt>" --resume <session_id>` → Claude melanjutkan percakapan yang sama persis seperti sesi interaktif biasa (riwayat, memory yang sudah dibaca, dsb tetap ada dalam konteks).
-4. Kalau `--resume` gagal (sesi sudah tidak ada/kedaluwarsa) → bridge otomatis retry SEKALI tanpa `--resume`, supaya chat tidak macet — user tidak perlu tahu ini terjadi, cuma kehilangan histori lama.
+1. First message from a chat → `claude -p "<prompt>"` without `--resume` → Claude creates a new session, and the `session_id` comes back in the JSON output.
+2. The `session_id` is stored in `sessions.json` keyed by `chat_id`.
+3. Next message from the same chat → `claude -p "<prompt>" --resume <session_id>` → Claude continues exactly the same conversation as an ordinary interactive session (history, memory already read, etc. all stay in context).
+4. If `--resume` fails (the session no longer exists/expired) → the bridge automatically retries ONCE without `--resume` so the chat doesn't get stuck — the user doesn't need to know this happened, they only lose the old history.
 
-Ini artinya bridge sendiri **stateless** soal isi percakapan — semua "ingatan" ada di sesi Claude Code (dikelola `claude` CLI sendiri) dan di memory per-repo (`~/.claude/projects/*/memory/`, lihat `~/CLAUDE.md`). Kalau proses `bridge` di-restart, tidak ada percakapan yang hilang — `sessions.json` tetap ada, tinggal lanjut resume.
+This means the bridge itself is **stateless** with respect to conversation content — all "memory" lives in the Claude Code session (managed by the `claude` CLI itself) and in per-repo memory (`~/.claude/projects/*/memory/`, see `~/CLAUDE.md`). If the `bridge` process restarts, no conversation is lost — `sessions.json` is still there, just keep resuming.
 
-**Penting**: `claude -p --resume <id>` tidak dirancang untuk diakses beberapa proses sekaligus pada `session_id` yang sama — lihat [§9](#9-kunci-per-chat-concurrency) untuk kenapa ini penting dan bagaimana bridge menjamin cuma satu proses aktif per chat.
+**Important**: `claude -p --resume <id>` is not designed to be accessed by several processes at once on the same `session_id` — see [§9](#9-per-chat-locking-concurrency) for why this matters and how the bridge guarantees only one active process per chat.
 
-## 7. Lampiran media
+## 7. Media attachments
 
-Gambar, video, dokumen, dan stiker ditangani. Voice note ditranskrip otomatis secara lokal via `whisper.cpp` (lihat §7.1) kalau sudah di-setup; kalau belum, fallback ke prompt "minta pengirim ketik ulang" seperti sebelumnya.
+Images, video, documents and stickers are handled. Voice notes are transcribed locally with `whisper.cpp` (see §7.1) when set up; if not, they fall back to the "ask the sender to type it out" prompt as before.
 
-**Cara kerja:**
-1. gowa (dengan `WHATSAPP_AUTO_DOWNLOAD_MEDIA=true`, default-nya sendiri) men-download lampiran ke `/app/statics/media/...` di dalam container, lalu payload webhook-nya berisi path relatif itu (string biasa kalau tanpa caption, atau object `{path, caption}` kalau ada — lihat `internal/webhook/media.go`, `mediaRef.UnmarshalJSON` menangani keduanya).
-2. `docker-compose.yml` mount `./data/statics:/app/statics`, jadi path itu juga ada di host — `resolveMediaPath()` menerjemahkannya ke path absolut lewat `GOWA_MEDIA_DIR` (default `./data/statics`, relatif terhadap working directory bridge).
-3. **Gotcha yang menghabiskan waktu debug**: entrypoint gowa nge-`chown` folder media itu ke uid internal container (20001) dan menulis file dengan mode `0600` — user host yang menjalankan bridge (uid berbeda) sama sekali tidak bisa baca file itu tanpa perbaikan tambahan. Fix-nya: sidecar `gowa-media-perms-fix` (image `alpine:3.19`, `restart: unless-stopped`) yang loop `chmod -R o+rX /data/statics` tiap 5 detik di volume yang sama — jalan sebagai root (default container biasa), jadi bisa `chmod` file yang bukan miliknya. Kalau lampiran gagal dibaca lagi, cek dulu apakah sidecar ini benar-benar jalan (`docker ps`).
-4. `buildPrompt()` menggabungkan caption (kalau ada) dengan instruksi eksplisit berisi path absolut, misalnya untuk gambar: `"[Lampiran gambar: /path/ke/file.jpg — baca file ini untuk melihat isinya sebelum membalas]"`. Tidak ada API multimodal terpisah di mode print (`-p`) — Claude "melihat" gambar lewat tool Read-nya sendiri, dipicu oleh instruksi teks ini.
-5. Untuk voice note: lihat §7.1 — kalau transkripsi tersedia dan berhasil, teksnya masuk sebagai `"[Transkrip voice note]: <teks>"`; kalau tidak, fallback ke prompt lama yang minta pengirim ketik ulang.
+**How it works:**
+1. gowa (with `WHATSAPP_AUTO_DOWNLOAD_MEDIA=true`, its own default) downloads the attachment to `/app/statics/media/...` inside the container, and the webhook payload then carries that relative path (a plain string with no caption, or an object `{path, caption}` if there is one — see `internal/webhook/media.go`, `mediaRef.UnmarshalJSON` handles both).
+2. `docker-compose.yml` mounts `./data/statics:/app/statics`, so that path also exists on the host — `resolveMediaPath()` translates it to an absolute path via `GOWA_MEDIA_DIR` (default `./data/statics`, relative to the bridge's working directory).
+3. **A gotcha that cost a lot of debugging time**: gowa's entrypoint `chown`s that media folder to the container's internal uid (20001) and writes files with mode `0600` — the host user running the bridge (a different uid) cannot read those files at all without an extra fix. The fix: the `gowa-media-perms-fix` sidecar (image `alpine:3.19`, `restart: unless-stopped`), which loops `chmod -R o+rX /data/statics` on the same volume — it runs as root (the default for a plain container), so it can `chmod` files it doesn't own. If attachments fail to read again, first check that this sidecar is really running (`docker ps`).
+4. `buildPrompt()` combines the caption (if any) with an explicit instruction containing the absolute path, for an image for example: `"[Image attachment: /path/to/file.jpg — read this file to see its contents before replying]"`. There is no separate multimodal API in print mode (`-p`) — Claude "sees" the image through its own Read tool, triggered by this text instruction.
+5. For voice notes: see §7.1 — if transcription is available and succeeds, the text goes in as `"[Voice note transcript]: <text>"`; if not, it falls back to the old prompt asking the sender to type it out.
 
-**Verified**: dites end-to-end 2026-08-29 dengan foto sungguhan lewat WhatsApp, termasuk memastikan sidecar permission-fix bekerja otomatis tanpa intervensi manual pada percobaan kedua dan seterusnya.
+**Verified**: tested end-to-end on 2026-08-29 with a real photo over WhatsApp, including confirming that the permission-fix sidecar works automatically without manual intervention from the second attempt on.
 
-### 7.1 Transkripsi voice note (`internal/transcribe`)
+### 7.1 Voice-note transcription (`internal/transcribe`)
 
-Lokal sepenuhnya — `whisper.cpp` (CPU, tanpa GPU) + model multilingual, tidak ada API cloud/biaya per menit. Dibenchmark langsung di Raspberry Pi 5 target (Cortex-A76, 4 thread, audio uji 11 detik):
+Entirely local — `whisper.cpp` (CPU, no GPU) + a multilingual model, no cloud API or per-minute cost. Benchmarked directly on the target Raspberry Pi 5 (Cortex-A76, 4 threads, 11-second test audio):
 
-| Model | Ukuran | Waktu proses | Real-time factor |
+| Model | Size | Processing time | Real-time factor |
 |---|---|---|---|
-| tiny | 77MB | 1.8 detik | ~6x lebih cepat |
-| base (default) | 147MB | 4.8 detik | ~2.3x lebih cepat |
-| small | 488MB | 16.1 detik | ~1.5x lebih lambat |
+| tiny | 77MB | 1.8 s | ~6x faster |
+| base (default) | 147MB | 4.8 s | ~2.3x faster |
+| small | 488MB | 16.1 s | ~1.5x slower |
 
-`base` dipilih sebagai default — keseimbangan terbaik akurasi/kecepatan untuk voice note pendek (WhatsApp jarang di atas 1 menit).
+`base` was chosen as the default — the best accuracy/speed balance for short voice notes (WhatsApp voice notes rarely exceed 1 minute).
 
-**Cara kerja:**
-1. `handleMessage()` (goroutine async, bukan `ServeHTTP`) memanggil `transcribe.Transcriber.Transcribe()` — sengaja **tidak** di jalur sinkron webhook, karena gowa cuma kasih ~10 detik untuk ack dan transkripsi (apalagi model `small`) bisa lebih lama dari itu.
-2. Audio dinormalisasi lewat `ffmpeg` ke WAV 16kHz mono PCM dulu — voice note WhatsApp datang sebagai Opus-in-Ogg, dan decoder bawaan whisper.cpp (miniaudio) cuma reliable untuk Ogg-Vorbis, bukan Opus.
-3. `whisper-cli -nt -np` dipanggil untuk output teks bersih tanpa timestamp/log tambahan.
-4. `webhook.FinalizeAudioPrompt()` menggabungkan caption (kalau ada) dengan hasil transkrip, atau fallback ke prompt lama kalau `Transcriber` nil (belum di-setup) atau transkripsi gagal untuk file itu.
+**How it works:**
+1. `handleMessage()` (async goroutine, not `ServeHTTP`) calls `transcribe.Transcriber.Transcribe()` — deliberately **not** on the synchronous webhook path, because gowa only allows ~10 seconds for the ack and transcription (especially with the `small` model) can take longer than that.
+2. The audio is first normalized through `ffmpeg` to 16kHz mono PCM WAV — WhatsApp voice notes arrive as Opus-in-Ogg, and whisper.cpp's bundled decoder (miniaudio) is only reliable for Ogg-Vorbis, not Opus.
+3. `whisper-cli -nt -np` is invoked for clean text output without timestamps or extra logging.
+4. `webhook.FinalizeAudioPrompt()` combines the caption (if any) with the transcript, or falls back to the old prompt if the `Transcriber` is nil (not set up) or transcription failed for that file.
 
-**Setup** (opsional, lihat README §6): `scripts/setup-whisper.sh` build `whisper.cpp` dari source dan download model ke `bin/whisper-cli` + `data/whisper/ggml-base.bin`. `newTranscriber()` di `cmd/bridge/main.go` cek keberadaan kedua file itu saat startup — kalau tidak ada, transkripsi nonaktif otomatis tanpa bikin bridge gagal start (fitur opsional, bukan hard dependency).
+**Setup** (optional, see the README's voice-note section): `scripts/setup-whisper.sh` builds `whisper.cpp` from source and downloads the model to `bin/whisper-cli` + `data/whisper/ggml-base.bin`. `newTranscriber()` in `cmd/bridge/main.go` checks that both files exist at startup — if not, transcription switches itself off without making the bridge fail to start (an optional feature, not a hard dependency).
 
-**Verified**: dites 2026-08-29 — benchmark ketiga ukuran model di atas dijalankan langsung di Pi 5, hasil transkrip akurat (dites pakai sample audio bahasa Inggris bawaan whisper.cpp); implementasi kode diverifikasi build bersih (`go build`, `go vet`).
+**Verified**: tested on 2026-08-29 — the benchmark of the three model sizes above was run directly on the Pi 5, and the transcripts were accurate (tested with whisper.cpp's bundled English sample audio); the code implementation was verified to build cleanly (`go build`, `go vet`).
 
-## 8. Durability pesan
+## 8. Message durability
 
-Masalah yang diperbaiki: webhook handler harus ack gowa dalam <10 detik, jadi pekerjaan sesungguhnya (panggil `claude -p`, kirim balasan) jalan di goroutine terpisah, async dari respons HTTP. Kalau proses bridge mati tepat di antara ack dan selesainya goroutine itu, gowa tidak akan retry (sudah dapat 200 duluan) — pesan itu bisa hilang tanpa jejak.
+The problem this fixes: the webhook handler must ack gowa within <10 seconds, so the real work (calling `claude -p`, sending the reply) runs in a separate goroutine, async from the HTTP response. If the bridge process dies exactly between the ack and that goroutine finishing, gowa will not retry (it already got its 200) — the message could vanish without a trace.
 
-**Solusi** (`internal/pending`): setiap pesan yang lolos filter ditulis ke `~/.claude-whatsapp/pending/<message_id>.json` (nama file dari `message_id`, jadi idempotent kalau ada redelivery) **sebelum** di-ack, dan baru dihapus (`Done()`) setelah balasan — sukses ataupun pesan fallback error — benar-benar terkirim. Kalau `SendMessage` sendiri gagal (bukan error dari Claude, tapi gagal ngirim balasannya), file pending-nya sengaja **tidak** dihapus, supaya restart berikutnya coba lagi.
+**The solution** (`internal/pending`): every message that passes the filters is written to `~/.claude-whatsapp/pending/<message_id>.json` (the file name comes from `message_id`, so it is idempotent if there is a redelivery) **before** being acked, and is only deleted (`Done()`) once the reply — success or the fallback error message — has really been sent. If `SendMessage` itself fails (not an error from Claude, but a failure to send the reply), the pending file is deliberately **not** deleted, so the next restart tries again.
 
-Saat startup, `main.go` memanggil `pending.Store.ListAll()` dan me-*replay* setiap file yang tersisa lewat `webhook.Handler.Replay()` — persis alur normal, cuma masuknya dari `main.go` bukan `ServeHTTP`. Lihat diagram [§4](#4-startup--replay-pesan-pending).
+At startup, `main.go` calls `pending.Store.ListAll()` and replays every leftover file through `webhook.Handler.Replay()` — exactly the normal flow, just entering from `main.go` instead of `ServeHTTP`. See the diagram in [§4](#4-startup--replaying-pending-messages).
 
-**Verified**: diuji dengan menyuntik file pending buatan lalu me-restart service — log menunjukkan `pending: found 1 message(s)... replaying`, pesan berhasil dibalas, file terhapus otomatis.
+**Verified**: tested by injecting a fabricated pending file and restarting the service — the log shows `pending: found 1 message(s)... replaying`, the message was answered, and the file was deleted automatically.
 
-## 9. Kunci per-chat (concurrency)
+## 9. Per-chat locking (concurrency)
 
-**Masalah yang ditemukan langsung, live, 2026-08-29**: bridge yang sedang menjalankan fitur whisper.cpp (§7.1) melakukan beberapa kali `scripts/deploy.sh` sambil bekerja — tiap restart mematikan proses `claude -p` yang sedang jalan di tengah, lalu [§4](#4-startup--replay-pesan-pending) me-*replay* pesan yang belum terjawab. Karena `replayPending()` di `main.go` mendispatch **semua** pesan pending sekaligus (`go handler.Replay(m)` per pesan, tanpa menunggu satu sama lain), dua pesan untuk chat yang sama ter-replay **bersamaan** — keduanya menjalankan `claude -p --resume <session_id yang sama>` di waktu yang sama. Hasilnya: satu pesan trivial ("ok, gass") tersangkut bermenit-menit tanpa balasan, dan setiap restart berikutnya mengulang masalah yang sama (replay lagi, race lagi).
+**A problem found live on 2026-08-29**: while the bridge was being used to implement the whisper.cpp feature (§7.1), `scripts/deploy.sh` was run several times mid-work — each restart killed the `claude -p` process that was running, and then [§4](#4-startup--replaying-pending-messages) replayed the unanswered messages. Because `replayPending()` in `main.go` dispatches **all** pending messages at once (`go handler.Replay(m)` per message, without waiting for each other), two messages for the same chat were replayed **simultaneously** — both ran `claude -p --resume <the same session_id>` at the same time. The result: one trivial message ("ok, go") got stuck for minutes with no reply, and every following restart repeated the same problem (replay again, race again).
 
-**Solusi** (`internal/webhook/chatlock.go`): `chatLocks`, sebuah map `chat_id → *sync.Mutex` yang dibuat on-demand. `handleMessage()` — dipanggil baik dari alur normal (`ServeHTTP`) maupun replay — mengunci `chat_id` di awal dan melepasnya lewat `defer` di akhir. Chat yang berbeda tetap berjalan paralel sepenuhnya (mutex per-key, bukan satu lock global); pesan kedua untuk chat yang **sama** cukup menunggu gilirannya, bukan race.
+**The solution** (`internal/webhook/chatlock.go`): `chatLocks`, a `chat_id → *sync.Mutex` map created on demand. `handleMessage()` — called both from the normal flow (`ServeHTTP`) and from replay — locks the `chat_id` at the start and releases it via `defer` at the end. Different chats still run fully in parallel (a per-key mutex, not one global lock); a second message for the **same** chat simply waits its turn instead of racing.
 
 ```mermaid
 flowchart TD
-    A["Pesan baru untuk chat X"] --> B{"chat_id X sedang dikunci?"}
-    B -->|Tidak| C["Lock(X) → proses claude -p → Unlock(X)"]
-    B -->|Ya, sedang diproses pesan lain| D["Tunggu di antrian mutex"]
+    A["New message for chat X"] --> B{"chat_id X locked?"}
+    B -->|No| C["Lock(X) → run claude -p → Unlock(X)"]
+    B -->|Yes, another message is being processed| D["Wait in the mutex queue"]
     D --> C
-    E["Pesan untuk chat Y (berbeda)"] --> F["Lock(Y) → jalan paralel,<br/>tidak menunggu X"]
+    E["Message for chat Y (different)"] --> F["Lock(Y) → runs in parallel,<br/>doesn't wait for X"]
 ```
 
-**Verified**: unit test (`internal/webhook/chatlock_test.go`) membuktikan 20 goroutine untuk `chat_id` yang sama tidak pernah > 1 yang aktif bersamaan, dan 2 `chat_id` berbeda tidak saling memblokir. Di produksi: 5 pesan berturut-turut ke chat yang sama setelah fix di-deploy, semuanya selesai berurutan tanpa macet (`journalctl` menunjukkan 5x `replied ok` berturutan, bukan hang).
+**Verified**: a unit test (`internal/webhook/chatlock_test.go`) proves 20 goroutines for the same `chat_id` never have more than 1 active at once, and 2 different `chat_id`s don't block each other. In production: 5 consecutive messages to the same chat after the fix was deployed all completed in order without hanging (`journalctl` shows 5 consecutive `replied ok`, not a hang).
 
-Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported VMA range` — keterbatasan kernel ARM64, bukan bug kode); test tetap valid dijalankan tanpa `-race`.
+Note that `go test -race` does not work on this Pi 5 (`ThreadSanitizer: unsupported VMA range` — an ARM64 kernel limitation, not a code bug); the tests remain valid when run without `-race`.
 
-## 10. Access control per-grup
+## 10. Per-group access control
 
-`config.IsAllowed(chatID, from)` menggerbang DM dan grup **secara terpisah**:
+`config.IsAllowed(chatID, from)` gates DMs and groups **separately**:
 
-- **DM** (`chat_id` berakhiran `@s.whatsapp.net`): diproses kalau `from` ATAU `chat_id` ada di `ALLOWED_SENDERS` — sama seperti sebelumnya.
-- **Grup** (`chat_id` berakhiran `@g.us`): diproses kalau `chat_id` ada di `ALLOWED_GROUPS` — **`ALLOWED_SENDERS` tidak relevan sama sekali** untuk grup. Sekali sebuah grup di-allowlist, **siapa pun anggota grup itu** bisa memicu bridge, bukan cuma nomor yang ada di `ALLOWED_SENDERS`.
+- **DM** (`chat_id` ending in `@s.whatsapp.net`): processed if `from` OR `chat_id` is in `ALLOWED_SENDERS` — same as before.
+- **Group** (`chat_id` ending in `@g.us`): processed if `chat_id` is in `ALLOWED_GROUPS` — **`ALLOWED_SENDERS` is irrelevant** for groups. Once a group is allowlisted, **any member of that group** can trigger the bridge, not just the numbers in `ALLOWED_SENDERS`.
 
-**Kenapa desainnya begitu (bukan per-member di dalam grup):** payload webhook gowa untuk pesan grup tidak menyertakan data mentioned-JID (`payload.mentions` semacamnya tidak ada — sudah dicek langsung ke source gowa, bukan asumsi). Tanpa itu, bridge tidak punya cara membedakan "bot di-mention" dari "pesan biasa di grup", jadi tidak ada dasar teknis untuk mention-gating. Kontrol akses jadi di level grup: keputusan "apakah grup ini boleh pakai bridge" ada di tangan Anda saat mengisi `ALLOWED_GROUPS`, bukan di tangan bridge saat runtime.
+**Why it is designed this way (not per-member inside a group):** gowa's webhook payload for group messages carries no mentioned-JID data (there is no `payload.mentions` or similar — checked directly against gowa's source, not assumed). Without it, the bridge has no way to tell "the bot was mentioned" from "an ordinary message in the group", so there is no technical basis for mention-gating. Access control therefore sits at the group level: the decision "may this group use the bridge" is in your hands when you fill in `ALLOWED_GROUPS`, not in the bridge's hands at runtime.
 
-**Konsekuensi praktis**: kalau ingin lebih ketat dari "semua anggota grup X boleh", satu-satunya cara sekarang adalah membatasi grup mana yang di-allowlist (grup kecil/tepercaya), bukan membatasi siapa di dalamnya.
+**Practical consequence**: if you want it stricter than "every member of group X is allowed", the only way today is to limit which groups are allowlisted (small/trusted groups), not who is inside them.
 
-**Cara dapat JID grup**: `GET /user/my/groups` di REST API gowa, atau lihat field `chat_id` pada webhook pesan yang sudah pernah masuk dari grup itu.
+**How to get a group's JID**: `GET /user/my/groups` on gowa's REST API, or look at the `chat_id` field on a webhook message that already came in from that group.
 
-**Verified**: `internal/config/config_test.go` — DM diizinkan/ditolak sesuai `ALLOWED_SENDERS`, grup diizinkan/ditolak sesuai `ALLOWED_GROUPS` independen dari `ALLOWED_SENDERS` (termasuk kasus: nomor yang ada di `ALLOWED_SENDERS` TIDAK otomatis bisa masuk ke grup yang belum di-allowlist).
+**Verified**: `internal/config/config_test.go` — DMs allowed/denied according to `ALLOWED_SENDERS`, groups allowed/denied according to `ALLOWED_GROUPS` independently of `ALLOWED_SENDERS` (including the case: a number in `ALLOWED_SENDERS` does NOT automatically get into a group that isn't allowlisted).
 
-## 11. Keamanan
+## 11. Security
 
-- **HMAC signature**: setiap webhook dari gowa ditandatangani `HMAC-SHA256` pakai `WEBHOOK_SECRET` (header `X-Hub-Signature-256: sha256=<hex>`). Bridge menolak (`401`) request yang signature-nya tidak cocok — lihat `webhook.Handler.validSignature`.
-- **Allowlist pengirim**: `ALLOWED_SENDERS` (env var, wajib diisi — bridge menolak start kalau kosong) membatasi siapa saja yang pesannya diproses. Ini nomor HP **pengirim** (`payload.from`), bukan nomor device bridge sendiri.
-- **Basic auth ke gowa**: bridge otentikasi ke REST API gowa pakai `GOWA_BASIC_AUTH_USER/PASSWORD` yang sama dengan yang dipasang di gowa lewat flag `--basic-auth`.
-- **Permission Claude**: subprocess `claude -p` dijalankan dengan `--permission-mode auto` (classifier permission Claude Code bawaan, bukan `--dangerously-skip-permissions`) — tool call yang berisiko tetap butuh persetujuan/diblokir sesuai kebijakan auto-mode yang sama seperti sesi interaktif biasa.
-- **Admin UI**: default hanya `127.0.0.1`. Bind ke alamat lain wajib menyebut IP spesifik (`0.0.0.0` ditolak) dan `ADMIN_ALLOWED_NETS`; IP klien di luar daftar itu ditolak sebelum request diproses. Opsional `ADMIN_PASSWORD` (basic auth). Header `Host` divalidasi (anti DNS-rebinding), POST wajib membawa header `X-Admin-Request` dan `Origin` yang sama (anti-CSRF), dan proxy gambar QR dibatasi ke direktori QR gowa. Kode OAuth yang ditempel saat login Claude tidak disimpan dan di-redact dari output. Lihat §16.
-- **Secrets**: `.env` (berisi `WEBHOOK_SECRET`, password gowa) di-`.gitignore`, tidak pernah masuk git. `.env.example` cuma placeholder.
-- **Bukan sandbox**: proses `claude -p` jalan sebagai user Linux biasa yang menjalankan bridge — akses filesystem/perintahnya sama persis dengan yang dimiliki user itu di mesin tersebut. Kalau user itu punya `sudo` tanpa password (umum di setup single-user seperti Raspberry Pi pribadi), Claude yang dipicu lewat WhatsApp juga bisa menjalankan `sudo` — dan ini **benar-benar terjadi** saat implementasi §7.1 (`apt-get install cmake`, `mkdir`/`chown` untuk `data/whisper/` semuanya lewat `sudo` tanpa password, dipicu dari pesan WhatsApp). `--permission-mode auto` adalah jaring pengaman heuristik (classifier bawaan Claude Code), **bukan** batas keamanan formal seperti container terisolasi — pertimbangkan ini sebelum memberi bridge akses ke akun dengan privilese luas.
+- **HMAC signature**: every webhook from gowa is signed with `HMAC-SHA256` using `WEBHOOK_SECRET` (header `X-Hub-Signature-256: sha256=<hex>`). The bridge rejects (`401`) requests whose signature doesn't match — see `webhook.Handler.validSignature`.
+- **Sender allowlist**: `ALLOWED_SENDERS` (env var, required — the bridge refuses to start if empty) limits whose messages are processed. This is the **sender's** phone number (`payload.from`), not the bridge's own device number.
+- **Basic auth to gowa**: the bridge authenticates to gowa's REST API with the same `GOWA_BASIC_AUTH_USER/PASSWORD` that is set on gowa through the `--basic-auth` flag.
+- **Claude permissions**: the `claude -p` subprocess runs with `--permission-mode auto` (Claude Code's built-in permission classifier, not `--dangerously-skip-permissions`) — risky tool calls still need approval/are blocked according to the same auto-mode policy as an ordinary interactive session.
+- **Admin UI**: by default only `127.0.0.1`. Binding to another address requires naming a specific IP (`0.0.0.0` is refused) and `ADMIN_ALLOWED_NETS`; client IPs outside that list are rejected before the request is processed. Optional `ADMIN_PASSWORD` (basic auth). The `Host` header is validated (anti DNS-rebinding), POSTs must carry an `X-Admin-Request` header and a matching `Origin` (anti-CSRF), and the QR image proxy is restricted to gowa's QR directory. The OAuth code pasted during Claude sign-in is not stored and is redacted from output. See §16.
+- **Secrets**: `.env` (holding `WEBHOOK_SECRET` and the gowa password) is in `.gitignore` and never enters git. `.env.example` is placeholders only.
+- **Not a sandbox**: the `claude -p` process runs as the ordinary Linux user that runs the bridge — its filesystem/command access is exactly what that user has on that machine. If that user has passwordless `sudo` (common in single-user setups such as a personal Raspberry Pi), Claude triggered through WhatsApp can also run `sudo` — and this **actually happened** while implementing §7.1 (`apt-get install cmake`, `mkdir`/`chown` for `data/whisper/`, all via passwordless `sudo`, triggered from a WhatsApp message). `--permission-mode auto` is a heuristic safety net (Claude Code's built-in classifier), **not** a formal security boundary like an isolated container — consider this before giving the bridge access to an account with broad privileges.
 
-## 12. Belum diimplementasikan
+## 12. Not implemented yet
 
-- Mention-gating di grup (balas cuma kalau di-mention) — tidak bisa dibangun sekarang, gowa tidak expose data mention di webhook (lihat [§10](#10-access-control-per-grup)). Access control per-grup sendiri **sudah ada**, level grup bukan level member.
-- Approval tool-call lewat reaction emoji — sebelum tool call berisiko (mis. `sudo`), Claude berhenti dan minta konfirmasi 👍/👎 di WhatsApp. Arah desain yang sudah diriset: `PreToolUse` hooks Claude Code (bisa memblokir tool call, jalan juga di mode `-p`) — belum diimplementasikan, protokol stdin/stdout-nya perlu dites empiris dulu.
-- Rate limiting lintas-chat — kunci per-chat ([§9](#9-kunci-per-chat-concurrency)) mencegah race di chat yang sama, tapi belum ada batas jumlah proses `claude -p` paralel across banyak chat berbeda sekaligus.
+- Mention-gating in groups (reply only when mentioned) — can't be built right now, gowa doesn't expose mention data in the webhook (see [§10](#10-per-group-access-control)). Per-group access control itself **exists**, at group level rather than member level.
+- Tool-call approval via emoji reaction — before a risky tool call (e.g. `sudo`), Claude stops and asks for a 👍/👎 confirmation on WhatsApp. The researched design direction: Claude Code's `PreToolUse` hooks (they can block a tool call and also run in `-p` mode) — not implemented yet, its stdin/stdout protocol needs to be tested empirically first.
+- Cross-chat rate limiting — the per-chat lock ([§9](#9-per-chat-locking-concurrency)) prevents races within the same chat, but there is no cap yet on the number of parallel `claude -p` processes across many different chats at once.
 
-## 13. Konfigurasi (env var)
+## 13. Configuration (env vars)
 
-| Variabel | Dipakai oleh | Default | Keterangan |
+| Variable | Used by | Default | Description |
 |---|---|---|---|
-| `LISTEN_ADDR` | bridge | `:8099` | Alamat HTTP server bridge (nerima webhook) |
-| `GOWA_BASE_URL` | bridge | `http://localhost:3011` | Endpoint REST API gowa |
-| `GOWA_BASIC_AUTH_USER/PASSWORD` | bridge, gowa | — | Kredensial basic auth REST API gowa |
-| `WEBHOOK_SECRET` | bridge, gowa | — (**wajib**) | Kunci HMAC, harus sama di kedua sisi |
-| `ALLOWED_SENDERS` | bridge | — (**wajib**) | JID/nomor, pisah koma, yang boleh DM ([§10](#10-access-control-per-grup)) |
-| `ALLOWED_GROUPS` | bridge | (kosong = grup nonaktif) | JID grup (`...@g.us`), pisah koma, yang boleh chat ([§10](#10-access-control-per-grup)) |
-| `CLAUDE_BIN` | bridge | `claude` | Path binary `claude` CLI |
-| `WORK_DIR` | bridge | `$HOME` | cwd tempat `claude -p` dijalankan — ini yang bikin instruksi cross-project di `~/CLAUDE.md` kebaca |
-| `SESSION_STORE_PATH` | bridge | `~/.claude-whatsapp/sessions.json` | Lokasi peta chat_id → session_id |
-| `PENDING_DIR` | bridge | `~/.claude-whatsapp/pending` | Lokasi antrian durable ([§8](#8-durability-pesan)) |
-| `GOWA_MEDIA_DIR` | bridge | `./data/statics` | Path host tempat `/app/statics` gowa di-mount ([§7](#7-lampiran-media)) |
-| `WHISPER_BIN` | bridge | `./bin/whisper-cli` | Binary whisper.cpp — lihat [§7.1](#71-transkripsi-voice-note-internaltranscribe) |
-| `WHISPER_MODEL` | bridge | `./data/whisper/ggml-base.bin` | Model ggml whisper.cpp |
-| `FFMPEG_BIN` | bridge | `ffmpeg` | Untuk normalisasi Opus-in-Ogg → WAV sebelum transkripsi |
-| `WHISPER_LANG` | bridge | `auto` | Kode bahasa whisper, atau `auto` untuk deteksi per-klip |
-| `GOWA_PORT` | docker-compose | `3011` | Port host untuk gowa |
-| `ADMIN_ADDR` | admin | `127.0.0.1:8098` | Daftar `host:port` (pisah koma) tempat Admin UI listen. Non-loopback wajib IP spesifik + `ADMIN_ALLOWED_NETS`. Alamat yang belum ada saat boot dicoba ulang tiap 5 detik |
-| `ADMIN_ALLOWED_NETS` | admin | (kosong) | CIDR klien yang boleh konek, pisah koma (loopback selalu boleh). **Wajib** kalau `ADMIN_ADDR` berisi alamat non-loopback |
-| `ADMIN_ALLOWED_HOSTS` | admin | (kosong) | Nama `Host` tambahan yang diterima (host dari `ADMIN_ADDR` otomatis) |
-| `ADMIN_PASSWORD` | admin | (kosong) | Kalau diisi, semua request butuh basic auth (user `admin`) |
+| `LISTEN_ADDR` | bridge | `:8099` | Bridge HTTP server address (receives webhooks) |
+| `GOWA_BASE_URL` | bridge | `http://localhost:3011` | gowa REST API endpoint |
+| `GOWA_BASIC_AUTH_USER/PASSWORD` | bridge, gowa | — | Basic-auth credentials for gowa's REST API |
+| `WEBHOOK_SECRET` | bridge, gowa | — (**required**) | HMAC key, must be identical on both sides |
+| `ALLOWED_SENDERS` | bridge | — (**required**) | JIDs/numbers, comma-separated, allowed to DM ([§10](#10-per-group-access-control)) |
+| `ALLOWED_GROUPS` | bridge | (empty = groups disabled) | Group JIDs (`...@g.us`), comma-separated, allowed to chat ([§10](#10-per-group-access-control)) |
+| `CLAUDE_BIN` | bridge | `claude` | Path to the `claude` CLI binary |
+| `WORK_DIR` | bridge | `$HOME` | cwd `claude -p` runs in — this is what lets the cross-project instructions in `~/CLAUDE.md` be read |
+| `SESSION_STORE_PATH` | bridge | `~/.claude-whatsapp/sessions.json` | Location of the chat_id → session_id map |
+| `PENDING_DIR` | bridge | `~/.claude-whatsapp/pending` | Location of the durable queue ([§8](#8-message-durability)) |
+| `GOWA_MEDIA_DIR` | bridge | `./data/statics` | Host path where gowa's `/app/statics` is mounted ([§7](#7-media-attachments)) |
+| `WHISPER_BIN` | bridge | `./bin/whisper-cli` | whisper.cpp binary — see [§7.1](#71-voice-note-transcription-internaltranscribe) |
+| `WHISPER_MODEL` | bridge | `./data/whisper/ggml-base.bin` | whisper.cpp ggml model |
+| `FFMPEG_BIN` | bridge | `ffmpeg` | For normalizing Opus-in-Ogg → WAV before transcription |
+| `WHISPER_LANG` | bridge | `auto` | whisper language code, or `auto` for per-clip detection |
+| `GOWA_PORT` | docker-compose | `3011` | Host port for gowa |
+| `ADMIN_ADDR` | admin | `127.0.0.1:8098` | Comma-separated `host:port` list the Admin UI listens on. Non-loopback requires specific IPs + `ADMIN_ALLOWED_NETS`. Addresses that don't exist yet at boot are retried every 5 seconds |
+| `ADMIN_ALLOWED_NETS` | admin | (empty) | Client CIDRs allowed to connect, comma-separated (loopback is always allowed). **Required** if `ADMIN_ADDR` contains a non-loopback address |
+| `ADMIN_ALLOWED_HOSTS` | admin | (empty) | Extra `Host` names to accept (the hosts from `ADMIN_ADDR` are automatic) |
+| `ADMIN_PASSWORD` | admin | (empty) | If set, every request needs basic auth (user `admin`) |
 
 ## 14. Deployment & persistence
 
-- **gowa + sidecar**: Docker Compose, `docker compose up -d` (menjalankan `gowa` dan `gowa-media-perms-fix` sekaligus). Persistence koneksi WhatsApp ada di volume `./data/whatsapp` (sqlite whatsmeow store); lampiran media di `./data/statics`.
-- **bridge**: dibangun jadi binary native (`go build -o bin/bridge ./cmd/bridge`), dipasang sebagai `systemd --user` service (`deploy/claude-whatsapp.service.template`, di-generate `scripts/deploy.sh` dengan path & `$PATH` mesin masing-masing) — `Restart=always`, `RestartSec=5`. Tidak ada TTY/prompt interaktif sama sekali — restart otomatis systemd langsung jalan bersih, tanpa langkah tambahan.
-- Redeploy setelah ubah kode: `scripts/deploy.sh` (idempotent — build ulang, `daemon-reload`, `restart` eksplisit supaya binary baru benar-benar terpakai, bukan cuma `enable --now` yang diam-diam skip restart kalau service sudah jalan). **Ingat**: tiap restart mematikan proses `claude -p` yang sedang jalan — normal untuk deploy sesekali, tapi hindari redeploy berkali-kali beruntun saat ada percakapan aktif (lihat [§9](#9-kunci-per-chat-concurrency) untuk kenapa ini pernah jadi masalah).
-- Cek status: `systemctl --user status claude-whatsapp.service`, `docker logs claude-whatsapp-gowa`, `docker ps` (pastikan `gowa-media-perms-fix` juga `Up`), `journalctl --user -u claude-whatsapp.service -f`.
+- **gowa + sidecar**: Docker Compose, `docker compose up -d` (starts `gowa` and `gowa-media-perms-fix` together). WhatsApp connection persistence lives in the `./data/whatsapp` volume (whatsmeow's sqlite store); media attachments in `./data/statics`.
+- **bridge**: built as a native binary (`go build -o bin/bridge ./cmd/bridge`), installed as a `systemd --user` service (`deploy/claude-whatsapp.service.template`, generated by `scripts/deploy.sh` with each machine's own paths and `$PATH`) — `Restart=always`, `RestartSec=5`. There is no TTY/interactive prompt at all — systemd's automatic restart comes back up cleanly, with no extra steps.
+- Redeploy after changing code: `scripts/deploy.sh` (idempotent — rebuilds, `daemon-reload`, an explicit `restart` so the new binary is really used, not just `enable --now`, which silently skips the restart if the service is already running). **Remember**: every restart kills the `claude -p` processes that are running — fine for an occasional deploy, but avoid redeploying several times in a row while a conversation is active (see [§9](#9-per-chat-locking-concurrency) for why this once became a problem).
+- Checking status: `systemctl --user status claude-whatsapp.service`, `docker logs claude-whatsapp-gowa`, `docker ps` (make sure `gowa-media-perms-fix` is also `Up`), `journalctl --user -u claude-whatsapp.service -f`.
 
-## 15. Referensi API gowa yang dipakai
+## 15. gowa API reference used
 
-| Endpoint | Method | Dipakai untuk |
+| Endpoint | Method | Used for |
 |---|---|---|
-| `/webhook` (di sisi bridge) | POST | Terima event `message` dari gowa |
-| `/send/message` | POST | Kirim balasan teks. Body: `{phone, message}` |
-| `/send/chat-presence` | POST | Indikator "mengetik". Body: `{phone, action}` — **`action` cuma terima `"start"`/`"stop"`**, bukan `"composing"`/`"paused"` (gotcha, lihat memory repo) |
-| `/message/{id}/reaction` | POST | Reaksi emoji (belum dipakai bridge, tersedia di client). Body: `{phone, emoji}` |
-| `/devices` | POST | Buat device slot baru (dipakai sekali saat pairing) |
-| `/app/login-with-code` | GET | Minta kode pairing — perlu `?device_id=` walau endpoint "legacy" |
-| `/app/status` | GET | Cek status login sesungguhnya (`is_logged_in`) — lebih bisa dipercaya dari field `state` di `/devices/{id}` |
+| `/webhook` (bridge side) | POST | Receive `message` events from gowa |
+| `/send/message` | POST | Send a text reply. Body: `{phone, message}` |
+| `/send/chat-presence` | POST | "Typing" indicator. Body: `{phone, action}` — **`action` only accepts `"start"`/`"stop"`**, not `"composing"`/`"paused"` (a gotcha: those belong to a different field in the webhook payload) |
+| `/message/{id}/reaction` | POST | Emoji reaction (not used by the bridge yet, available in the client). Body: `{phone, emoji}` |
+| `/devices` | POST | Create a new device slot (used once during pairing) |
+| `/app/login-with-code` | GET | Request a pairing code — needs `?device_id=` even though it's the "legacy" endpoint |
+| `/app/status` | GET | Check the real login status (`is_logged_in`) — more trustworthy than the `state` field on `/devices/{id}` |
 
-Detail lengkap format payload webhook: `docs/webhook-payload.md` di [repo gowa](https://github.com/aldinokemal/go-whatsapp-web-multidevice).
+Full details of the webhook payload format: `docs/webhook-payload.md` in the [gowa repo](https://github.com/aldinokemal/go-whatsapp-web-multidevice).
 
 ## 16. Admin UI & installer
 
-**Admin UI** (`cmd/admin`, `internal/admin`) adalah proses terpisah dari bridge — unit systemd sendiri (`claude-whatsapp-admin.service`) — supaya tetap bisa dibuka justru saat bridge yang mati. Satu halaman statis (`web/index.html`, di-embed lewat `go:embed`, tanpa dependency frontend) yang memanggil `/api/*`:
+The **Admin UI** (`cmd/admin`, `internal/admin`) is a separate process from the bridge — its own systemd unit (`claude-whatsapp-admin.service`) — so it can still be opened precisely when the bridge is down. A single static page (`web/index.html`, embedded via `go:embed`, no frontend dependencies) that calls `/api/*`:
 
-| Endpoint | Fungsi |
+| Endpoint | Purpose |
 |---|---|
-| `GET /api/status` | Gabungan: unit systemd bridge + `/health`, antrian pending, jumlah chat, container Docker, status device gowa (`/app/status`), dan `claude auth status`. Menghasilkan verdict `ok` / `degraded` / `down` beserta alasannya |
-| `GET /api/logs` | `journalctl` bridge atau `docker logs` gowa |
-| `POST /api/wa/qr`, `GET /api/wa/qr.png`, `POST /api/wa/pair-code` | Pairing WhatsApp. Kalau gowa belum punya device, satu device baru dibuat otomatis |
-| `POST /api/wa/reconnect`, `POST /api/wa/logout` | Pemulihan koneksi / unlink (logout wajib membawa `confirm: "LOGOUT"`) |
-| `GET/POST /api/claude/login[/start\|/code\|/cancel]` | Login Claude — lihat di bawah |
+| `GET /api/status` | Aggregate: the bridge's systemd unit + `/health`, pending queue, number of chats, Docker containers, gowa device status (`/app/status`), and `claude auth status`. Produces an `ok` / `degraded` / `down` verdict with its reasons |
+| `GET /api/logs` | The bridge's `journalctl` or gowa's `docker logs` |
+| `POST /api/wa/qr`, `GET /api/wa/qr.png`, `POST /api/wa/pair-code` | WhatsApp pairing. If gowa has no device yet, a new one is created automatically |
+| `POST /api/wa/reconnect`, `POST /api/wa/logout` | Connection recovery / unlink (logout must carry `confirm: "LOGOUT"`) |
+| `GET/POST /api/claude/login[/start\|/code\|/cancel]` | Claude sign-in — see below |
 
-Catatan perilaku gowa yang memengaruhi desainnya: daftar device diambil dari `GET /devices` (bukan `/app/devices`, yang menjawab 400 saat registry kosong), dan `/app/logout` pada sesi yang sudah mati tetap menghapus record device tetapi lalu mengembalikan error — Admin UI menganggapnya sukses selama device-nya hilang sesudahnya.
+Notes on gowa behaviour that shaped the design: the device list is read from `GET /devices` (not `/app/devices`, which answers 400 when the registry is empty), and `/app/logout` on an already-dead session still deletes the device record but then returns an error — the Admin UI treats that as success as long as the device is gone afterwards.
 
-**Login Claude dari UI** menjalankan `claude auth login --claudeai|--console` sebagai subprocess dengan stdin pipe, mengambil URL `https://…` pertama dari outputnya, lalu menulis kode yang ditempel operator ke stdin (prompt `Paste code here if prompted >`). PKCE verifier tidak pernah keluar dari proses `claude`. Hanya satu sesi login aktif sekaligus, dibatasi 10 menit, dan tiap run diberi nomor generasi supaya proses lama yang baru selesai tidak menimpa state run baru. Kredensial `claude` berlaku untuk seluruh user Linux (semua sesi Claude Code), bukan hanya bridge. Alur ini diuji dengan skrip `claude` tiruan yang meniru transkrip CLI; jika format output CLI berubah di versi mendatang, jalur cadangannya tetap `claude auth login` di terminal.
+**Claude sign-in from the UI** runs `claude auth login --claudeai|--console` as a subprocess with a piped stdin, takes the first `https://…` URL from its output, then writes the code the operator pastes to stdin (the `Paste code here if prompted >` prompt). The PKCE verifier never leaves the `claude` process. Only one sign-in session is active at a time, capped at 10 minutes, and each run gets a generation number so an old process that finishes late can't overwrite the state of a new run. The `claude` credential applies to the whole Linux user (every Claude Code session), not just the bridge. This flow was tested with a fake `claude` script that mimics the CLI's transcript; if the CLI's output format changes in a future version, the fallback remains `claude auth login` in a terminal.
 
-**Installer.** `scripts/quick-install.sh` (`curl | bash`) mengunduh tarball rilis untuk arsitektur mesin (arm64 / armv7 / amd64), mengekstraknya ke `~/claude-whatsapp` (menjalankan ulang = upgrade: `.env` dan `data/` tidak disentuh), lalu memanggil `scripts/install.sh`: membuat `.env` (secret acak, `chmod 600`, nomor pengirim dinormalisasi ke JID), `docker compose up -d`, dan `scripts/deploy.sh` yang memasang unit systemd memakai binary siap pakai di `bin/`. Tarball dibuat `scripts/package-release.sh` (pure Go, `CGO_ENABLED=0`) oleh workflow `.github/workflows/release.yml` saat tag `v*` di-push. Pairing WhatsApp dan login Claude sengaja tidak dilakukan installer — keduanya dikerjakan dari Admin UI.
+**Installer.** `scripts/quick-install.sh` (`curl | bash`) downloads the release tarball for the machine's architecture (arm64 / armv7 / amd64), extracts it to `~/claude-whatsapp` (running it again = upgrade: `.env` and `data/` are left alone), then calls `scripts/install.sh`: it creates `.env` (random secrets, `chmod 600`, sender number normalized to a JID), runs `docker compose up -d`, and runs `scripts/deploy.sh`, which installs the systemd units using the prebuilt binaries in `bin/`. The tarballs are produced by `scripts/package-release.sh` (pure Go, `CGO_ENABLED=0`) in the `.github/workflows/release.yml` workflow when a `v*` tag is pushed. WhatsApp pairing and Claude sign-in are deliberately not done by the installer — both are done from the Admin UI.
