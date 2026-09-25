@@ -22,7 +22,7 @@ flowchart LR
     Bridge -->|"POST /send/message"| Gowa
 ```
 
-It is deliberately as simple as possible: **no interactive process to keep alive**. gowa stands alone as a container (easy to restart), the bridge is a plain headless HTTP server (`systemd --user`, `Restart=always`), and every message is one self-contained `claude -p` call. Full details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (in Indonesian).
+It is deliberately as simple as possible: **no interactive process to keep alive**. gowa stands alone as a container (easy to restart), the bridge is a plain headless HTTP server (`systemd --user`, `Restart=always`), and every message is one self-contained `claude -p` call. Full details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 Two WhatsApp numbers are involved:
 
@@ -33,7 +33,7 @@ Two WhatsApp numbers are involved:
 
 ## Read this first (security)
 
-- **This is not a sandbox.** `claude -p` runs as the Linux user that installed the bridge, with `--permission-mode auto`. Anyone in `ALLOWED_SENDERS` (or a member of a group in `ALLOWED_GROUPS`) can effectively make Claude read files and run commands on that machine — including `sudo` if that user has passwordless `sudo`. Only allow numbers you fully trust, and consider installing it under a separate unprivileged user or VM. Details in [`docs/ARCHITECTURE.md` §11](docs/ARCHITECTURE.md#11-keamanan).
+- **This is not a sandbox.** `claude -p` runs as the Linux user that installed the bridge, with `--permission-mode auto`. Anyone in `ALLOWED_SENDERS` (or a member of a group in `ALLOWED_GROUPS`) can effectively make Claude read files and run commands on that machine — including `sudo` if that user has passwordless `sudo`. Only allow numbers you fully trust, and consider installing it under a separate unprivileged user or VM. Details in [`docs/ARCHITECTURE.md` §11](docs/ARCHITECTURE.md#11-security).
 - **Unofficial WhatsApp client.** gowa/whatsmeow is not an official WhatsApp product; using it may go against WhatsApp's terms of service and can get an account restricted. Use at your own risk — preferably with a dedicated number.
 - **Keep `.env` and `data/` private.** `.env` holds the webhook secret and the gowa password; `data/whatsapp/` is the live WhatsApp session (full access to the bot account). Both are in `.gitignore` — never commit or share them.
 - **The Admin UI is for you only.** It can re-link WhatsApp and change the Claude login. By default it is reachable only from the machine itself; don't expose it to the internet. See [Admin UI](#admin-ui).
@@ -125,7 +125,7 @@ Clients outside `ADMIN_ALLOWED_NETS` are rejected right away (403), and an IP th
 
 ## Configuration
 
-Everything lives in `.env` in the install directory (`chmod 600`; fully commented template: [`.env.example`](.env.example), reference table: [`docs/ARCHITECTURE.md` §13](docs/ARCHITECTURE.md#13-konfigurasi-env-var)). The installer fills in what is required; the rest has sensible defaults.
+Everything lives in `.env` in the install directory (`chmod 600`; fully commented template: [`.env.example`](.env.example), reference table: [`docs/ARCHITECTURE.md` §13](docs/ARCHITECTURE.md#13-configuration-env-vars)). The installer fills in what is required; the rest has sensible defaults.
 
 | Variable | Purpose |
 |---|---|
@@ -230,7 +230,7 @@ Start with the [Admin UI](#admin-ui): the status, the reasons and the logs usual
 - **Voice notes** — transcribed locally (`whisper.cpp`, multilingual, no cloud API) before being sent to `claude -p`. Optional. On a Raspberry Pi 5 (4 CPU threads) the `base` model runs ~2.3x faster than real time.
 - **Durability** — messages are written to an on-disk queue (`~/.claude-whatsapp/pending/`) before being acked to gowa and replayed automatically if the bridge died mid-flight.
 - **One `claude -p` per chat at a time** — locked per `chat_id`; further messages for the same chat queue instead of fighting over the same `--resume` session.
-- **Per-group access control** — `ALLOWED_GROUPS` is separate from `ALLOWED_SENDERS`. Once a group is listed, every member can trigger the bot (gowa's webhook carries no @-mention data, see [`docs/ARCHITECTURE.md` §10](docs/ARCHITECTURE.md#10-access-control-per-grup)).
+- **Per-group access control** — `ALLOWED_GROUPS` is separate from `ALLOWED_SENDERS`. Once a group is listed, every member can trigger the bot (gowa's webhook carries no @-mention data, see [`docs/ARCHITECTURE.md` §10](docs/ARCHITECTURE.md#10-per-group-access-control)).
 - **Admin UI** — status, WhatsApp recovery and Claude sign-in ([above](#admin-ui)).
 
 **Not implemented yet:** mention-gating in groups (a data limitation from gowa), tool-call approval via emoji reaction, and cross-chat rate limiting (every different chat is its own `claude -p` process, with no cap on how many run in parallel). Contributions and PRs welcome.
@@ -259,7 +259,7 @@ claude-whatsapp/
 │   ├── package-release.sh           # cross-compile + one tarball per architecture
 │   └── setup-whisper.sh             # whisper.cpp + model (optional)
 ├── .github/workflows/release.yml    # tag v* -> publish arm64/armv7/amd64 tarballs
-└── docs/                            # ARCHITECTURE.md (Indonesian), images/
+└── docs/                            # ARCHITECTURE.md (+ .id.md), images/
 ```
 
 **Releasing:** `git tag v0.x.0 && git push origin v0.x.0` — the workflow runs the tests, then publishes the tarballs that `quick-install.sh` downloads.
