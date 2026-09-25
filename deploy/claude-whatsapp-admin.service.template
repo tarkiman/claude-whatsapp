@@ -1,0 +1,18 @@
+[Unit]
+Description=Claude-WhatsApp admin UI (network-restricted status + WhatsApp recovery)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_DIR__
+# The admin shells out to `claude auth status`, so it needs the same PATH as
+# the bridge unit. scripts/deploy.sh fills this in at install time.
+Environment=PATH=__PATH__
+EnvironmentFile=__REPO_DIR__/.env
+ExecStart=__REPO_DIR__/bin/admin
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

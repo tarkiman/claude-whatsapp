@@ -24,12 +24,43 @@ Bridge ini sengaja dibuat sesederhana mungkin: **tidak ada proses interaktif yan
 
 - Linux (dites di Raspberry Pi 5 / aarch64 Debian 13; harusnya jalan di distro Linux lain & x86_64 juga — gowa dan bridge sama-sama Go, tidak ada dependency spesifik-arsitektur)
 - [Docker](https://docs.docker.com/engine/install/) + Docker Compose plugin
-- [Go](https://go.dev/dl/) 1.26+
+- [Go](https://go.dev/dl/) 1.26+ — hanya untuk instalasi manual dari source; [instalasi cepat](#instalasi-cepat-satu-baris) memakai binary siap pakai dan tidak butuh Go
 - [Claude Code CLI](https://docs.claude.com/claude-code) terpasang dan sudah login (`npm install -g @anthropic-ai/claude-code`, lalu `claude` sekali secara interaktif untuk login) — bridge memanggil binary `claude` yang sama ini
 - Nomor WhatsApp yang bisa dijadikan *linked device* tambahan (nomor yang sudah Anda pakai sehari-hari, atau nomor khusus)
 - `systemd --user` (untuk persistence) — hampir semua distro modern sudah punya ini bawaan
 
-## Instalasi
+## Instalasi cepat (satu baris)
+
+Cara termudah — mengunduh rilis siap pakai (tanpa Go, tanpa build), menyiapkan `.env` dengan secret acak, menjalankan gowa via Docker, dan memasang service systemd:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/tarkiman/claude-whatsapp/main/scripts/quick-install.sh | bash
+```
+
+Installer menanyakan **nomor HP Anda** (pengirim yang boleh chat ke bot — pakai kode negara, mis. `6281234567890`). Sesudahnya tinggal dua langkah dari halaman admin (`http://127.0.0.1:8098`, lihat [Admin UI](#admin-ui-monitoring--recovery)): tautkan WhatsApp lewat QR/kode, dan login akun Claude — tidak perlu curl manual atau terminal untuk itu.
+
+Prasyarat: Linux dengan systemd, [Docker](https://docs.docker.com/engine/install/) + plugin Compose (user Anda harus ada di grup `docker`), dan [Claude Code CLI](https://docs.claude.com/claude-code) terpasang di `PATH`. Jalankan sebagai **user biasa, bukan `sudo`**. Go tidak dibutuhkan.
+
+Opsi tambahan lewat `bash -s --`:
+
+```bash
+curl -sSL .../quick-install.sh | bash -s -- --allowed-senders 6281234567890 --non-interactive
+```
+
+| Opsi | Fungsi |
+|---|---|
+| `--allowed-senders <nomor[,nomor]>` | nomor pengirim, tanpa perlu ditanya interaktif |
+| `--dir <path>` | lokasi instalasi (default `~/claude-whatsapp`) |
+| `--version <tag>` | pasang versi tertentu, mis. `v0.1.0` (default: rilis terbaru) |
+| `--gowa-port <port>` | port gowa di host (default `3011`) |
+| `--skip-start` | cuma siapkan `.env`, jangan jalankan Docker/service |
+| `--non-interactive` | jangan bertanya apa pun |
+
+Menjalankan perintah yang sama lagi = **upgrade**: binary dan script diganti, `.env` dan `data/` (sesi WhatsApp) dibiarkan. Untuk pemasangan manual dari source, lihat bagian di bawah.
+
+> Installer mengunduh dari GitHub Releases, jadi repo harus publik dan sudah punya rilis (`git tag v0.1.0 && git push origin v0.1.0` memicu `.github/workflows/release.yml`). Sebelum itu, pakai instalasi manual.
+
+## Instalasi manual (dari source)
 
 ### 1. Clone & siapkan `.env`
 
@@ -65,6 +96,8 @@ scripts/deploy.sh
 Idempotent — aman dijalankan ulang tiap kali ada perubahan kode (build ulang binary, regenerate unit systemd dengan path & `$PATH` mesin Anda saat ini, restart service).
 
 ### 4. Pairing device WhatsApp
+
+> Cara paling mudah: buka [Admin UI](#admin-ui-monitoring--recovery) → **Show pairing QR** / **Get code**. Langkah curl di bawah ini setara dan berguna kalau admin UI belum jalan.
 
 API manajemen multi-device gowa (`/devices/{id}/login*`) belum stabil per image `:latest` saat ini — pakai endpoint legacy dengan `device_id` eksplisit:
 
@@ -111,6 +144,22 @@ Build `whisper.cpp` dari source dan pasang model multilingual `base` ke `data/wh
 
 Referensi env var lengkap ada di `.env.example` dan [`docs/ARCHITECTURE.md` §13](docs/ARCHITECTURE.md#13-konfigurasi-env-var). Dua yang wajib diisi (bridge menolak start kalau kosong): `WEBHOOK_SECRET`, `ALLOWED_SENDERS`.
 
+## Admin UI (monitoring & recovery)
+
+`scripts/deploy.sh` juga memasang service kedua, `claude-whatsapp-admin`, berupa halaman web kecil di `http://127.0.0.1:8098`. Isinya: status bridge / gowa / akun Claude dalam satu layar (dengan penanda **All good / Degraded / Down** dan alasannya), log terbaru, dan tombol recovery WhatsApp — **Reconnect**, **pairing QR**, **pairing by code**, dan **Unlink** (untuk ganti nomor).
+
+- **Default: hanya loopback.** Halaman ini bisa me-relink WhatsApp, jadi tanpa konfigurasi tambahan ia cuma listen di `127.0.0.1`. Dari laptop/HP, buka lewat SSH tunnel: `ssh -L 8098:127.0.0.1:8098 <host-pi>` lalu buka `http://localhost:8098`.
+- **Buka dari LAN / ZeroTier (opsional).** Isi `.env`:
+  ```
+  ADMIN_ADDR=127.0.0.1:8098,192.168.1.20:8098,10.147.20.15:8098   # IP spesifik, bukan 0.0.0.0
+  ADMIN_ALLOWED_NETS=192.168.1.0/24,10.147.0.0/16                   # klien yang boleh konek
+  ADMIN_PASSWORD=<acak>                                             # opsional tapi disarankan
+  ```
+  Klien di luar `ADMIN_ALLOWED_NETS` ditolak (403) sebelum apa pun diproses; `0.0.0.0` ditolak saat start; IP yang belum ada saat boot (mis. interface ZeroTier) dicoba ulang tiap 5 detik. Ingat: ini HTTP biasa, password (kalau diisi) terkirim tanpa enkripsi — cukup untuk LAN rumah / ZeroTier (yang sudah terenkripsi), tidak untuk jaringan publik.
+- **Proses terpisah dari bridge** — sengaja, supaya tetap bisa dibuka justru saat bridge yang bermasalah.
+- **Login / ganti akun Claude dari UI.** Kartu "Sign in / switch Claude account" menjalankan `claude auth login` di balik layar: UI menampilkan link sign-in, kamu login di browser (di perangkat mana saja), lalu menempel kode yang muncul di halaman callback kembali ke UI. Kode itu tidak disimpan/di-log (output CLI di-redact). Kredensial `claude` itu satu untuk seluruh user Linux (dipakai semua sesi Claude Code di Pi, bukan cuma bridge), jadi ganti akun di sini berlaku untuk semuanya; bridge langsung memakai login baru di pesan berikutnya tanpa restart. Alur ini diuji dengan skrip tiruan (`internal/admin/claudelogin_test.go`) — kalau format output CLI berubah di versi mendatang, jalur fallback-nya tetap `claude auth login --claudeai` di terminal.
+- Status `Down` + "WhatsApp is logged out" berarti sesi WhatsApp dihapus (mis. device di-unlink dari HP, atau HP utama offline terlalu lama) — bot tidak akan membalas sampai di-pair ulang lewat UI ini.
+
 ## Troubleshooting
 
 | Gejala | Kemungkinan penyebab | Cek |
@@ -144,6 +193,8 @@ Kontribusi/PR untuk salah satu di atas dipersilakan.
 ```
 claude-whatsapp/
 ├── cmd/bridge/main.go               # entrypoint
+├── cmd/admin/main.go                # entrypoint admin UI (default loopback-only)
+├── internal/admin/                  # handler + web/index.html (di-embed)
 ├── internal/
 │   ├── config/                      # baca & validasi .env
 │   ├── gowa/                        # REST client ke gowa
@@ -154,8 +205,13 @@ claude-whatsapp/
 │   └── transcribe/                  # exec whisper-cli untuk voice note
 ├── docker-compose.yml                # gowa + sidecar perbaikan permission
 ├── deploy/claude-whatsapp.service.template
-├── scripts/deploy.sh
+├── deploy/claude-whatsapp-admin.service.template
+├── scripts/quick-install.sh          # installer satu-baris (curl | bash) — unduh rilis + jalankan install.sh
+├── scripts/install.sh                # .env + gowa (Docker) + service systemd
+├── scripts/deploy.sh                 # build (kalau ada Go+source) / pakai bin/ + pasang service
+├── scripts/package-release.sh        # cross-compile + tarball per arsitektur (dipakai CI & tes lokal)
 ├── scripts/setup-whisper.sh          # build whisper.cpp + download model (opsional)
+├── .github/workflows/release.yml     # tag v* -> publish tarball arm64/armv7/amd64
 └── docs/ARCHITECTURE.md              # dokumentasi arsitektur lengkap
 ```
 
