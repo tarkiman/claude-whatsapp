@@ -2,6 +2,32 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.3.0] — 2026-09-28
+
+### Upgrade notes (read before upgrading)
+
+- **The Admin UI now has a real login** (username + password) instead of `ADMIN_PASSWORD` in `.env`. Coming from **0.2.0**: your `ADMIN_PASSWORD` is adopted automatically on the first start — sign in as `admin` with it, change it in the new *Admin login* card, then delete the line from `.env`. Coming from **0.1.x** (no password): other machines are refused until an account exists — open the page on the machine itself and create it there, or run `bin/admin passwd`.
+- **HTTP Basic authentication is no longer accepted.** The page uses a login form and a session cookie.
+- `scripts/deploy.sh` no longer generates a random `ADMIN_PASSWORD`; the installer asks for the login instead. `deploy.sh` only prints a notice when the admin listens beyond loopback and no login exists yet.
+- The admin no longer refuses to start when it listens beyond loopback without `ADMIN_PASSWORD`; instead it refuses every other machine until an account exists.
+
+### Added
+
+- **Login for the Admin UI**: one account whose password is stored only as a salted PBKDF2-SHA256 hash (600,000 iterations, standard library) in `~/.claude-whatsapp/admin.json` (`ADMIN_AUTH_FILE`, mode `0600`) — never in `.env`.
+  - login page, session cookie (`HttpOnly`, `SameSite=Strict`, `Secure` behind TLS), sessions expire after 30 minutes idle / 12 hours;
+  - **Change password** card (asks for the current password, signs every other browser out) and **Log out**;
+  - guess throttling: 5 wrong passwords lock a client out for 5 minutes, doubling each time (up to an hour);
+  - first-time setup page that only works from the machine itself and only while no account exists;
+  - `bin/admin passwd [--user NAME] [--stdin]` to create or reset the login from a terminal — the recovery path for a forgotten password;
+  - the installer asks for the admin username and password (without echo); `--admin-user`, and `ADMIN_PASSWORD` in the installer's environment for non-interactive installs (never a flag).
+- Migration: a legacy `ADMIN_PASSWORD` is hashed into the login file once, then ignored (`ADMIN_USER` picks the username, default `admin`).
+- Tests for the hash store, sessions, limiter, every login/setup/logout/change-password path, the `passwd` command, and the whole flow driven in a real browser; the authentication rules are mutation-tested.
+
+### Security
+
+- The admin password is no longer stored in clear text anywhere; a password changed from the UI or with `bin/admin passwd` invalidates every existing session, even when done while the admin is running.
+- Login verification takes the same time whether or not the username exists, and wrong-password answers never say which part was wrong.
+
 ## [0.2.0] — 2026-09-28
 
 ### Upgrade notes (read before upgrading from 0.1.x)

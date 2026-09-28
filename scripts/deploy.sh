@@ -20,10 +20,10 @@ if ! command -v claude >/dev/null 2>&1; then
 	echo "The bridge will fail to run Claude until it is installed and on PATH." >&2
 fi
 
-# v0.2.0 made ADMIN_PASSWORD mandatory whenever the admin UI listens beyond
-# loopback (that page decides who may run commands on this machine). Without
-# this, upgrading an install that serves the admin on LAN/ZeroTier would leave
-# the admin refusing to start — so create the password instead.
+# The admin UI has a login (username + password hash in ~/.claude-whatsapp/
+# admin.json). If it listens beyond loopback and no login exists yet, other
+# machines are refused until one is created — say so instead of leaving people
+# wondering why the page won't open.
 admin_beyond_loopback() {
 	local entries entry host
 	IFS=',' read -ra entries <<<"$(grep -E '^ADMIN_ADDR=' .env | tail -1 | cut -d= -f2-)"
@@ -40,11 +40,9 @@ admin_beyond_loopback() {
 	done
 	return 1
 }
-if admin_beyond_loopback && ! grep -qE '^ADMIN_PASSWORD=.+' .env; then
-	pw="$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-	printf '\n# Required whenever the admin UI listens beyond loopback (added by scripts/deploy.sh).\nADMIN_PASSWORD=%s\n' "$pw" >>.env
-	echo "NOTE: ADMIN_ADDR listens beyond loopback, so ADMIN_PASSWORD is now required."
-	echo "      Generated one and added it to .env (user: admin). Read it with: grep ADMIN_PASSWORD .env"
+if admin_beyond_loopback && [ ! -f "${ADMIN_AUTH_FILE:-$HOME/.claude-whatsapp/admin.json}" ] && ! grep -qE '^ADMIN_PASSWORD=.+' .env; then
+	echo "NOTE: the admin UI listens beyond loopback but has no login yet, so other machines are refused."
+	echo "      Create one with:  bin/admin passwd   (or open http://127.0.0.1:8098 on this machine)."
 fi
 
 if [ -d cmd/bridge ] && [ -d cmd/admin ] && command -v go >/dev/null 2>&1; then
@@ -84,4 +82,5 @@ loginctl enable-linger "$(whoami)"
 echo "Done. Check status with: systemctl --user status claude-whatsapp.service"
 echo "Admin UI: http://127.0.0.1:8098 (this machine only by default). From another machine use"
 echo "  ssh -L 8098:127.0.0.1:8098 <this-host>   then open http://localhost:8098"
-echo "  or serve it on LAN/ZeroTier with ADMIN_ADDR + ADMIN_ALLOWED_NETS + ADMIN_PASSWORD (see .env.example)."
+echo "  or serve it on LAN/ZeroTier with ADMIN_ADDR + ADMIN_ALLOWED_NETS (see .env.example)."
+echo "  Sign in with the admin login you created; forgot it? run: bin/admin passwd"

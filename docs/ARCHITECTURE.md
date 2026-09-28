@@ -20,7 +20,7 @@ Built on 2026-08-28 and developed and used day to day on a Raspberry Pi 5.
 | **claude CLI** | `@anthropic-ai/claude-code` (npm) | The actual brain — one subprocess call per message, print mode (`-p`), resumed per `chat_id`. |
 | **sessions.json** | Local JSON file | Map of `chat_id → claude session_id`, so the next `claude -p` call for the same chat uses `--resume`. |
 | **pending/*.json** | Local JSON files | Durable queue — one file per message that was acked to gowa but not yet answered. See [§8](#8-message-durability). |
-| **admin UI** | Go (this repo), separate process | Status, WhatsApp recovery, Claude sign-in and the access policy editor. Its own systemd unit, so it stays reachable when the bridge is down. See [§16](#16-admin-ui--installer). |
+| **admin UI** | Go (this repo), separate process | Status, WhatsApp recovery, Claude sign-in and the access policy editor, behind its own login. Its own systemd unit, so it stays reachable when the bridge is down. See [§16](#16-admin-ui--installer). |
 | **access.json** | Local JSON file | The access policy — personal or team mode, the one number / the group and its approved members. Written by the admin UI, re-read by the bridge on change. See [§10](#10-access-control-personal-and-team-modes). |
 
 ```mermaid
@@ -131,13 +131,14 @@ sequenceDiagram
 ```
 claude-whatsapp/
 ├── cmd/bridge/main.go          # entrypoint: wires components, replays pending on startup, HTTP server
-├── cmd/admin/main.go           # Admin UI entrypoint — see §16
+├── cmd/admin/main.go           # Admin UI entrypoint — see §16 (also `admin passwd`, in passwd.go)
 ├── internal/
 │   ├── config/config.go        # read .env, validate (ALLOWED_SENDERS & WEBHOOK_SECRET required)
 │   ├── access/access.go        # access policy: personal/team modes, roster, mention detection, access.json store — §10
 │   ├── gowa/client.go          # thin REST client for gowa (SendMessage, SetChatPresence, React)
 │   ├── gowa/admin.go           # device operations for the Admin UI (status, QR, pair code, logout)
 │   ├── admin/                  # Admin UI: handlers, network guard, Claude login, web/index.html — §16
+│   ├── adminauth/              # admin login: password hash (PBKDF2), sessions, guess limiter — §16
 │   ├── webhook/
 │   │   ├── handler.go          # HMAC verification, filtering, orchestration of one message cycle
 │   │   ├── media.go            # polymorphic attachment field parsing + buildPrompt()
@@ -277,8 +278,8 @@ Note that `go test -race` does not work on this Pi 5 (`ThreadSanitizer: unsuppor
 - **What the policy does not cover**: whoever controls an allowed WhatsApp account controls the machine (enable WhatsApp two-step verification on it), and text or files an allowed sender forwards can carry instructions aimed at Claude (prompt injection) — treat forwarded content with the same care as running it yourself. In team mode every approved member counts as such an account.
 - **Basic auth to gowa**: the bridge authenticates to gowa's REST API with the same `GOWA_BASIC_AUTH_USER/PASSWORD` that is set on gowa through the `--basic-auth` flag.
 - **Claude permissions**: the `claude -p` subprocess runs with `--permission-mode auto` (Claude Code's built-in permission classifier, not `--dangerously-skip-permissions`) — risky tool calls still need approval/are blocked according to the same auto-mode policy as an ordinary interactive session.
-- **Admin UI**: by default only `127.0.0.1`. Binding to another address requires naming a specific IP (`0.0.0.0` is refused) and `ADMIN_ALLOWED_NETS`; client IPs outside that list are rejected before the request is processed. `ADMIN_PASSWORD` (basic auth) is **mandatory** as soon as it listens beyond loopback — the page decides who may run commands on the machine, so the admin refuses to start otherwise. The `Host` header is validated (anti DNS-rebinding), POSTs must carry an `X-Admin-Request` header and a matching `Origin` (anti-CSRF), and the QR image proxy is restricted to gowa's QR directory. The OAuth code pasted during Claude sign-in is not stored and is redacted from output. See §16.
-- **Secrets**: `.env` (holding `WEBHOOK_SECRET` and the gowa password) is in `.gitignore` and never enters git. `.env.example` is placeholders only.
+- **Admin UI**: by default only `127.0.0.1`; binding elsewhere needs specific IPs (`0.0.0.0` is refused) and `ADMIN_ALLOWED_NETS` (client IPs outside it are rejected before anything is processed). Every request then needs a **login session** (§16): one account whose password is stored only as a salted PBKDF2-SHA256 hash (600,000 iterations, stdlib `crypto/pbkdf2`, no dependency) in a `0600` file; random 256-bit session tokens kept in memory (30 min idle / 12 h absolute, invalidated when the password changes — from the UI or from `bin/admin passwd`); wrong passwords throttled per client (5 tries, then a lockout that doubles up to an hour); constant-time comparison doing the same work whether or not the username matched. First-time setup from the web is accepted only from a loopback client and only while no account exists, and an unreadable credentials file is never mistaken for "not set up yet". On top of that: the `Host` header is validated (anti DNS-rebinding), POSTs — login included — need the `X-Admin-Request` header and a matching `Origin` (anti-CSRF), the cookie is `HttpOnly` + `SameSite=Strict` (+ `Secure` behind TLS), and the QR image proxy is limited to gowa's QR directory. The OAuth code pasted during Claude sign-in is not stored and is redacted from output. The transport itself is plain HTTP unless you put TLS in front.
+- **Secrets**: `.env` (holding `WEBHOOK_SECRET` and the gowa password) is in `.gitignore` and never enters git; `.env.example` is placeholders only. The admin password is not in `.env` at all — only its hash, in `~/.claude-whatsapp/admin.json` (`0600`).
 - **Not a sandbox**: the `claude -p` process runs as the ordinary Linux user that runs the bridge — its filesystem/command access is exactly what that user has on that machine. If that user has passwordless `sudo` (common in single-user setups such as a personal Raspberry Pi), Claude triggered through WhatsApp can also run `sudo` — and this **actually happened** while implementing §7.1 (`apt-get install cmake`, `mkdir`/`chown` for `data/whisper/`, all via passwordless `sudo`, triggered from a WhatsApp message). `--permission-mode auto` is a heuristic safety net (Claude Code's built-in classifier), **not** a formal security boundary like an isolated container — consider this before giving the bridge access to an account with broad privileges.
 
 ## 12. Not implemented yet
@@ -311,14 +312,15 @@ Note that `go test -race` does not work on this Pi 5 (`ThreadSanitizer: unsuppor
 | `ADMIN_ADDR` | admin | `127.0.0.1:8098` | Comma-separated `host:port` list the Admin UI listens on. Non-loopback requires specific IPs + `ADMIN_ALLOWED_NETS`. Addresses that don't exist yet at boot are retried every 5 seconds |
 | `ADMIN_ALLOWED_NETS` | admin | (empty) | Client CIDRs allowed to connect, comma-separated (loopback is always allowed). **Required** if `ADMIN_ADDR` contains a non-loopback address |
 | `ADMIN_ALLOWED_HOSTS` | admin | (empty) | Extra `Host` names to accept (the hosts from `ADMIN_ADDR` are automatic) |
-| `ADMIN_PASSWORD` | admin | (empty) | Basic auth (user `admin`) for every request. **Required** whenever `ADMIN_ADDR` listens beyond loopback |
+| `ADMIN_AUTH_FILE` | admin | `~/.claude-whatsapp/admin.json` | Where the admin login (username + password hash) is stored, `0600`. Created by the installer, the loopback setup page or `bin/admin passwd` |
+| `ADMIN_PASSWORD`, `ADMIN_USER` | admin | (empty) | **Legacy bootstrap only.** If no login file exists, this password is hashed into one on the first start (user `ADMIN_USER`, default `admin`); once the file exists it is ignored. Basic auth no longer exists |
 
 ## 14. Deployment & persistence
 
 - **gowa + sidecar**: Docker Compose, `docker compose up -d` (starts `gowa` and `gowa-media-perms-fix` together). WhatsApp connection persistence lives in the `./data/whatsapp` volume (whatsmeow's sqlite store); media attachments in `./data/statics`.
 - **bridge**: built as a native binary (`go build -o bin/bridge ./cmd/bridge`), installed as a `systemd --user` service (`deploy/claude-whatsapp.service.template`, generated by `scripts/deploy.sh` with each machine's own paths and `$PATH`) — `Restart=always`, `RestartSec=5`. There is no TTY/interactive prompt at all — systemd's automatic restart comes back up cleanly, with no extra steps.
-- **admin UI**: a second binary (`bin/admin`) and unit (`claude-whatsapp-admin.service`) installed by the same `scripts/deploy.sh`; loopback-only by default, `ADMIN_PASSWORD` required beyond loopback ([§16](#16-admin-ui--installer)).
-- **install / upgrade**: `scripts/quick-install.sh` → `scripts/install.sh` → `scripts/deploy.sh`. Re-running it upgrades in place and never touches `.env`, `data/` or `access.json`. `deploy.sh` also creates `ADMIN_PASSWORD` when an existing `ADMIN_ADDR` listens beyond loopback without one, so an upgrade from v0.1.x cannot leave the admin refusing to start.
+- **admin UI**: a second binary (`bin/admin`) and unit (`claude-whatsapp-admin.service`) installed by the same `scripts/deploy.sh`; loopback-only by default, behind its own login ([§16](#16-admin-ui--installer)); `bin/admin passwd` sets or resets the login from a terminal.
+- **install / upgrade**: `scripts/quick-install.sh` → `scripts/install.sh` → `scripts/deploy.sh`. The installer asks for the admin username and password (or reads `ADMIN_PASSWORD` from its environment when non-interactive) and runs `bin/admin passwd`; re-running it upgrades in place and never touches `.env`, `data/`, `access.json` or `admin.json`. `deploy.sh` only tells you when the admin listens beyond loopback and no login exists yet. Upgrading from v0.2.0 adopts the old `ADMIN_PASSWORD` automatically.
 - Redeploy after changing code: `scripts/deploy.sh` (idempotent — rebuilds, `daemon-reload`, an explicit `restart` so the new binary is really used, not just `enable --now`, which silently skips the restart if the service is already running). **Remember**: every restart kills the `claude -p` processes that are running — fine for an occasional deploy, but avoid redeploying several times in a row while a conversation is active (see [§9](#9-per-chat-locking-concurrency) for why this once became a problem).
 - Checking status: `systemctl --user status claude-whatsapp.service`, `docker logs claude-whatsapp-gowa`, `docker ps` (make sure `gowa-media-perms-fix` is also `Up`), `journalctl --user -u claude-whatsapp.service -f`.
 
@@ -349,12 +351,16 @@ The **Admin UI** (`cmd/admin`, `internal/admin`) is a separate process from the 
 |---|---|
 | `GET /api/status` | Aggregate: the bridge's systemd unit + `/health`, pending queue, number of chats, Docker containers, gowa device status (`/app/status`), and `claude auth status`. Produces an `ok` / `degraded` / `down` verdict with its reasons |
 | `GET/POST /api/access`, `GET /api/access/groups`, `GET /api/access/members?group=` | The "Who can instruct the bot" card: read/save the access policy, list the bot's groups, list a group's members next to their approval state. Saving validates and writes `access.json` atomically; the bridge picks it up on the next message |
+| `GET /login`, `GET /api/auth/state`, `POST /api/login`, `POST /api/setup` | The only public routes: the login page and its endpoints. `state` is `login`, `setup` or `broken`; `setup` can only be acted on from a loopback client |
+| `POST /api/logout`, `POST /api/auth/password` | Sign out; change the password (needs the current one, rate-limited, signs every other session out) |
 | `GET /api/logs` | The bridge's `journalctl` or gowa's `docker logs` |
 | `POST /api/wa/qr`, `GET /api/wa/qr.png`, `POST /api/wa/pair-code`, `GET /api/wa/status` | WhatsApp pairing. If gowa has no device yet, a new one is created automatically |
 | `POST /api/wa/reconnect`, `POST /api/wa/logout` | Connection recovery / unlink (logout must carry `confirm: "LOGOUT"`) |
 | `GET/POST /api/claude/login[/start\|/code\|/cancel]` | Claude sign-in — see below |
 
 Notes on gowa behaviour that shaped the design: the device list is read from `GET /devices` (not `/app/devices`, which answers 400 when the registry is empty), and `/app/logout` on an already-dead session still deletes the device record but then returns an error — the Admin UI treats that as success as long as the device is gone afterwards.
+
+**Admin login** (`internal/adminauth`, `internal/admin/auth.go`). `authGate` sits behind the network `guard`: without a live session, API calls get `401` and page loads are redirected to `/login`. A session is bound to the password's fingerprint (its salt), so changing the password anywhere — the UI, or `bin/admin passwd` run while the admin is up — signs every browser out. The account is created by the installer, by the setup page on the machine itself, or by `bin/admin passwd` (also the recovery path when the password is forgotten: it needs no login because it can only run on the host, as a user who can already read the file). A password given the old way (`ADMIN_PASSWORD` in `.env`) is adopted once at the first start. The package needs no third-party module.
 
 **Claude sign-in from the UI** runs `claude auth login --claudeai|--console` as a subprocess with a piped stdin, takes the first `https://…` URL from its output, then writes the code the operator pastes to stdin (the `Paste code here if prompted >` prompt). The PKCE verifier never leaves the `claude` process. Only one sign-in session is active at a time, capped at 10 minutes, and each run gets a generation number so an old process that finishes late can't overwrite the state of a new run. The `claude` credential applies to the whole Linux user (every Claude Code session), not just the bridge. This flow was tested with a fake `claude` script that mimics the CLI's transcript; if the CLI's output format changes in a future version, the fallback remains `claude auth login` in a terminal.
 

@@ -9,13 +9,17 @@
 # existing .env is NOT modified.
 #
 # Usage:
-#   scripts/install.sh [--allowed-senders <number[,number…]>] [--gowa-port <port>]
-#                      [--non-interactive] [--skip-start]
+#   scripts/install.sh [--allowed-senders <number[,number…]>] [--admin-user <name>]
+#                      [--gowa-port <port>] [--non-interactive] [--skip-start]
 #
 #   --allowed-senders  your phone number (the sender) with country code, e.g.
 #                      6281234567890 or 6281234567890@s.whatsapp.net. It becomes
 #                      the one number of personal mode. Asked interactively if
 #                      not given.
+#   --admin-user       username of the admin page login (default: asked, "admin").
+#                      The password is asked without echo, or read from the
+#                      ADMIN_PASSWORD environment variable when non-interactive
+#                      — never from a flag, so it stays out of shell history.
 #   --gowa-port        gowa's port on the host (default 3011)
 #   --non-interactive  never prompt; fail if a required value is missing
 #   --skip-start       only prepare .env — don't start Docker/the services
@@ -31,6 +35,7 @@ die() {
 
 ALLOWED_SENDERS_ARG=""
 GOWA_PORT_ARG=""
+ADMIN_USER_ARG=""
 INTERACTIVE=1
 SKIP_START=0
 
@@ -39,6 +44,11 @@ while [ $# -gt 0 ]; do
 	--allowed-senders)
 		[ $# -ge 2 ] || die "--allowed-senders needs a value"
 		ALLOWED_SENDERS_ARG="$2"
+		shift 2
+		;;
+	--admin-user)
+		[ $# -ge 2 ] || die "--admin-user needs a value"
+		ADMIN_USER_ARG="$2"
 		shift 2
 		;;
 	--gowa-port)
@@ -151,7 +161,7 @@ else
 fi
 
 if [ "$SKIP_START" -eq 1 ]; then
-	log "--skip-start: .env is ready. Continue yourself: docker compose up -d && scripts/deploy.sh"
+	log "--skip-start: .env is ready. Continue yourself: docker compose up -d && scripts/deploy.sh, then bin/admin passwd"
 	exit 0
 fi
 
@@ -168,6 +178,32 @@ docker compose up -d
 
 log "Installing the bridge + admin services (systemd --user)..."
 scripts/deploy.sh
+
+# --- admin login ------------------------------------------------------------------
+# The admin page has its own login (username + password hash in
+# ~/.claude-whatsapp/admin.json), chosen here so it is never open, and
+# changeable later from the page or with `bin/admin passwd`.
+ADMIN_LOGIN=skipped
+creds_file="${ADMIN_AUTH_FILE:-$HOME/.claude-whatsapp/admin.json}"
+admin_args=(passwd)
+[ -z "$ADMIN_USER_ARG" ] || admin_args+=(--user "$ADMIN_USER_ARG")
+if [ -f "$creds_file" ]; then
+	log "Admin login already exists — keeping it."
+	ADMIN_LOGIN=existing
+elif grep -qE '^ADMIN_PASSWORD=.+' .env; then
+	log "Adopting the ADMIN_PASSWORD from your .env as the admin login (change it later from the page)."
+	ADMIN_LOGIN=adopted
+elif [ -n "${ADMIN_PASSWORD:-}" ]; then
+	if printf '%s\n' "$ADMIN_PASSWORD" | bin/admin "${admin_args[@]}" --stdin; then ADMIN_LOGIN=created; else ADMIN_LOGIN=failed; fi
+elif [ "$INTERACTIVE" -eq 1 ] && ( exec 3</dev/tty ) 2>/dev/null; then
+	echo
+	echo "Choose the login for the admin page (username and password)."
+	if bin/admin "${admin_args[@]}" </dev/tty; then ADMIN_LOGIN=created; else ADMIN_LOGIN=failed; fi
+fi
+case "$ADMIN_LOGIN" in
+failed) warn "the admin login was not created — run 'bin/admin passwd' to try again." ;;
+skipped) warn "no admin login yet — run 'bin/admin passwd' (or open the admin page on this machine to create it)." ;;
+esac
 
 # --- wait for admin, then tell the user what is left ---------------------------
 admin_url="http://127.0.0.1:8098"
@@ -190,9 +226,10 @@ cat <<EOF
 
 ==> Installed. Two steps left, both from the admin page:
 
-  1. Open $admin_url
+  1. Open $admin_url and sign in with the username and password you chose
      (from another computer: ssh -L 8098:127.0.0.1:8098 $(whoami)@${host_ip:-<host-ip>}
-      then open http://localhost:8098 — or follow the LAN/ZeroTier notes in .env.example)
+      then open http://localhost:8098 — or follow the LAN/ZeroTier notes in .env.example).
+     Forgot the password? On this machine run: bin/admin passwd
 
   2. "WhatsApp recovery" card  → Show pairing QR (or Get code) → link WhatsApp
      "Sign in / switch Claude account" card → Claude account: $claude_state

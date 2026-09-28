@@ -13,7 +13,9 @@
 #   --version <tag>    install a specific version (default: latest release), e.g. v0.1.0
 #   --tarball <file>   use a local tarball instead of downloading from GitHub
 #   anything else      is passed on to scripts/install.sh (see install.sh --help):
-#                      --allowed-senders, --gowa-port, --non-interactive, --skip-start
+#                      --allowed-senders, --admin-user, --gowa-port, --non-interactive,
+#                      --skip-start. The admin password is asked without echo, or
+#                      read from the ADMIN_PASSWORD environment variable.
 #
 # Running it again = upgrade: binaries/scripts are replaced, .env and data/
 # are left alone. Run as a regular user (NOT sudo) — the systemd --user

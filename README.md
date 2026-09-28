@@ -37,7 +37,7 @@ Two WhatsApp numbers are involved:
 - **The access policy is the only gate — protect the accounts on it.** Anything from a number that is not allowed is ignored before anything runs (matching is exact, see [`docs/ARCHITECTURE.md` §10](docs/ARCHITECTURE.md#10-access-control-personal-and-team-modes)), and a broken policy file denies everybody. But whoever controls an allowed WhatsApp account controls the machine, so turn on WhatsApp two-step verification for it. Content an allowed person forwards (messages, documents) can also carry instructions aimed at Claude — treat forwarded content like something you are about to run yourself.
 - **Unofficial WhatsApp client.** gowa/whatsmeow is not an official WhatsApp product; using it may go against WhatsApp's terms of service and can get an account restricted. Use at your own risk — preferably with a dedicated number.
 - **Keep `.env` and `data/` private.** `.env` holds the webhook secret and the gowa password; `data/whatsapp/` is the live WhatsApp session (full access to the bot account). Both are in `.gitignore` — never commit or share them.
-- **The Admin UI is for you only.** It can re-link WhatsApp and change the Claude login. By default it is reachable only from the machine itself; don't expose it to the internet. See [Admin UI](#admin-ui).
+- **The Admin UI is for you only.** It can re-link WhatsApp, change the Claude login and decide who may instruct the bot. It has its own login (username + password, stored only as a hash), is reachable only from the machine itself by default, and must never be exposed to the internet. See [Admin UI](#admin-ui).
 
 ## Quick start
 
@@ -58,7 +58,7 @@ Run as a **regular user, not with `sudo`**:
 curl -sSL https://raw.githubusercontent.com/tarkiman/claude-whatsapp/main/scripts/quick-install.sh | bash
 ```
 
-The installer downloads a prebuilt release, asks for your **sender number** (your own phone number with country code and no leading 0, e.g. `6281234567890`), creates `.env` with random secrets, starts gowa with Docker Compose, and installs the bridge and admin services. Everything goes into `~/claude-whatsapp`.
+The installer downloads a prebuilt release, asks for your **sender number** (your own phone number with country code and no leading 0, e.g. `6281234567890`) and for the **username and password of the admin page** (typed without echo, at least 10 characters), creates `.env` with random secrets, starts gowa with Docker Compose, and installs the bridge and admin services. Everything goes into `~/claude-whatsapp`.
 
 <details>
 <summary>Installer options</summary>
@@ -72,6 +72,7 @@ curl -sSL .../quick-install.sh | bash -s -- --allowed-senders 6281234567890 --no
 | `--allowed-senders <number[,number]>` | sender number(s), without the interactive prompt |
 | `--dir <path>` | install location (default `~/claude-whatsapp`) |
 | `--version <tag>` | install a specific version, e.g. `v0.1.0` (default: latest release) |
+| `--admin-user <name>` | username of the admin page login (otherwise asked, default `admin`). The password is asked without echo, or — when non-interactive — read from the `ADMIN_PASSWORD` *environment variable* (never a flag, so it stays out of your shell history) |
 | `--gowa-port <port>` | gowa's host port (default `3011`) |
 | `--tarball <file>` | use a local release tarball instead of downloading one |
 | `--skip-start` | only prepare `.env`; don't start Docker or the services |
@@ -81,7 +82,9 @@ curl -sSL .../quick-install.sh | bash -s -- --allowed-senders 6281234567890 --no
 
 ### 3. Link WhatsApp
 
-Open the Admin UI at **http://127.0.0.1:8098** (from another computer: [SSH tunnel](#access-from-another-computer)). In the **WhatsApp recovery** card click **Show pairing QR**, then on the bot's phone go to *WhatsApp → Linked devices → Link a device* and scan the QR. The QR is valid for 30 seconds; the page shows success by itself. If you prefer a code, enter the bot's number and click **Get code**.
+Open the Admin UI at **http://127.0.0.1:8098** (from another computer: [SSH tunnel](#access-from-another-computer)) and sign in with the username and password you chose during installation. In the **WhatsApp recovery** card click **Show pairing QR**, then on the bot's phone go to *WhatsApp → Linked devices → Link a device* and scan the QR. The QR is valid for 30 seconds; the page shows success by itself. If you prefer a code, enter the bot's number and click **Get code**.
+
+![The admin login page](docs/images/login.png)
 
 ![Linking WhatsApp with a QR code](docs/images/pair-whatsapp.png)
 
@@ -137,8 +140,19 @@ A status and recovery page at `http://127.0.0.1:8098`, run as its own service (`
 - **Who can instruct the bot** — personal or team mode, the one number, the group and its approved members ([above](#who-can-instruct-the-bot)).
 - **WhatsApp recovery** — Reconnect (try this first when status says disconnected), pairing by QR, pairing by code, and **Unlink** to move to a different bot number.
 - **Sign in / switch Claude account** — sign in or change accounts without opening a terminal.
+- **Admin login** — username and password (only a hash is stored), log out, and change the password from the page; see [below](#admin-login).
 
 `Down` + "WhatsApp is logged out" means the WhatsApp session was deleted (for example the device was unlinked from the phone, or the main phone was offline for too long). The bot answers nothing until it is linked again — and no other alarm goes off, so check this page from time to time.
+
+### Admin login
+
+The page is behind its own login: **one account**, username and password chosen at install time. The password is stored only as a salted PBKDF2 hash in `~/.claude-whatsapp/admin.json` (mode `0600`), never in `.env`, and never sent anywhere. A session cookie (`HttpOnly`, `SameSite=Strict`) keeps you signed in for up to 12 hours (30 minutes idle); the admin restarting signs everybody out.
+
+- **Change the password** in the *Admin login* card (asks for the current one; every other browser is signed out). **Log out** is at the top right.
+- **Guessing is throttled:** after 5 wrong passwords a client is locked out for 5 minutes, doubling each time it happens again (up to an hour).
+- **Forgot the password?** On the machine itself run `~/claude-whatsapp/bin/admin passwd` (or `bin/admin passwd` in a source checkout). It can only be run there, by a user who can already read the file, so it needs no login. It also lets you rename the account with `--user`.
+- **No account yet** (for example after a manual install or an upgrade from v0.1.x): the login page offers *Create the admin login* — **only to a browser on the machine itself**. From anywhere else (LAN, ZeroTier, SSH tunnel excepted) the page just tells you to do it locally or run `bin/admin passwd`, so nobody else can claim it first.
+- This is still plain HTTP on a LAN: the password can be read by others on the same network, and the cookie cannot be marked `Secure`. Prefer ZeroTier (encrypted) or an SSH tunnel, or put TLS in front; never expose the page to the internet.
 
 ### Access from another computer
 
@@ -153,10 +167,9 @@ Or serve it directly on your LAN / [ZeroTier](https://www.zerotier.com/) by sett
 ```bash
 ADMIN_ADDR=127.0.0.1:8098,192.168.1.20:8098,10.147.20.15:8098   # this machine's specific IPs; 0.0.0.0 is refused
 ADMIN_ALLOWED_NETS=192.168.1.0/24,10.147.0.0/16                  # only clients from these networks are served
-ADMIN_PASSWORD=<long-random-string>                              # REQUIRED once the page listens beyond loopback
 ```
 
-Clients outside `ADMIN_ALLOWED_NETS` are rejected right away (403), and an IP that doesn't exist yet at boot (e.g. a ZeroTier interface) is retried every 5 seconds. This is plain HTTP, and this page decides who can make Claude run commands on the machine — so `ADMIN_PASSWORD` is **mandatory** whenever it listens beyond loopback (the admin refuses to start without it). Never expose the page to the public internet.
+Clients outside `ADMIN_ALLOWED_NETS` are rejected right away (403), and an IP that doesn't exist yet at boot (e.g. a ZeroTier interface) is retried every 5 seconds. Everyone allowed by the network rules still has to sign in ([above](#admin-login)); until an account exists, other machines are refused. Never expose the page to the public internet.
 
 ## Configuration
 
@@ -171,7 +184,9 @@ Everything lives in `.env` in the install directory (`chmod 600`; fully commente
 | `WEBHOOK_SECRET` | HMAC key between gowa and the bridge — generated randomly by the installer. |
 | `GOWA_BASIC_AUTH_USER/PASSWORD` | Credentials for gowa's REST API — the password is generated randomly by the installer. |
 | `WORK_DIR` | Working directory of `claude -p` (default `$HOME`; this is where your `CLAUDE.md` is picked up). |
-| `ADMIN_ADDR`, `ADMIN_ALLOWED_NETS`, `ADMIN_PASSWORD` | Admin UI access — see [above](#access-from-another-computer). |
+| `ADMIN_ADDR`, `ADMIN_ALLOWED_NETS` | Where the Admin UI listens and which client networks may reach it — see [above](#access-from-another-computer). |
+| `ADMIN_AUTH_FILE` | Where the admin login is stored (default `~/.claude-whatsapp/admin.json`). |
+| `ADMIN_PASSWORD`, `ADMIN_USER` | **Legacy bootstrap only:** if no login file exists, this password is hashed into one on the first start (user `ADMIN_USER`, default `admin`); afterwards it is ignored — remove it from `.env`. |
 
 To change `.env`: edit it, then `systemctl --user restart claude-whatsapp.service claude-whatsapp-admin.service` (plus `docker compose up -d` in the install directory if you changed anything gowa-related).
 
@@ -183,7 +198,7 @@ To change `.env`: edit it, then `systemctl --user restart claude-whatsapp.servic
 
 - The bot starts in **personal mode** with the first number in `ALLOWED_SENDERS` (extra entries are ignored, with a warning in the log). DMs from that number work exactly as before.
 - **`ALLOWED_GROUPS` no longer admits anybody.** Groups are now team mode: one group, an approved-member roster and a required @mention, set up in the Admin UI.
-- If the Admin UI listens beyond loopback (`ADMIN_ADDR` with a LAN/ZeroTier address), **`ADMIN_PASSWORD` is now required**. The installer/`scripts/deploy.sh` generates one for you and tells you where to read it (`grep ADMIN_PASSWORD .env`); your browser will ask for user `admin` and that password.
+- **The Admin UI now has a real login instead of `ADMIN_PASSWORD` in `.env`** (see [Admin login](#admin-login)). Coming from **v0.2.0**: your `ADMIN_PASSWORD` is adopted automatically on the first start — sign in as `admin` with it, change it in the *Admin login* card, then delete the line from `.env`. Coming from **v0.1.x** (no password at all): other machines are refused until you create the login — open the page on the machine itself, or run `bin/admin passwd`. HTTP Basic authentication is no longer accepted.
 
 **Uninstall:**
 
@@ -213,7 +228,7 @@ docker compose up -d      # gowa + the attachment-permission sidecar
 scripts/deploy.sh         # build bridge + admin, install the systemd --user services (idempotent)
 ```
 
-Continue with [steps 3 and 4](#3-link-whatsapp) above. `scripts/deploy.sh` is safe to re-run after any code change (rebuilds, regenerates the units with this machine's paths and `$PATH`, restarts explicitly).
+Then create the admin login with `bin/admin passwd` (you are asked for a username and a password, without echo), and continue with [steps 3 and 4](#3-link-whatsapp) above. `scripts/deploy.sh` is safe to re-run after any code change (rebuilds, regenerates the units with this machine's paths and `$PATH`, restarts explicitly).
 
 <details>
 <summary>Pairing WhatsApp without the Admin UI (curl)</summary>
@@ -256,6 +271,8 @@ Start with the [Admin UI](#admin-ui): the status, the reasons and the logs usual
 
 | Symptom | Likely cause | Check |
 |---|---|---|
+| I can't sign in to the Admin UI | Wrong username or password; *too many attempts* means a temporary lockout (wait, or reset the password on the machine) | On the machine itself: `bin/admin passwd`. From v0.2.0 the old `ADMIN_PASSWORD` from `.env` is the password until you change it |
+| The admin page says login setup is only possible on the machine | No account exists yet and you are not browsing from the machine itself | Open `http://127.0.0.1:8098` there, or run `bin/admin passwd` |
 | Bot ignores my @mention in the group | Not in team mode, the sender isn't ticked in the roster, the group isn't the selected one, or the text isn't a real @mention of the bot | Admin UI → *Who can instruct the bot*; set `LOG_GROUP_MESSAGES=1` and read the `group-message:` log line |
 | Bot silent although the service is `active` | WhatsApp session deleted/unlinked (Admin UI: `Down` + "logged out"), or gowa lost its connection | Admin UI → **Reconnect**, or pair again. `docker logs claude-whatsapp-gowa` |
 | No reply at all | `claude` not found on the systemd service's `$PATH`, or not signed in | `journalctl --user -u claude-whatsapp.service -n 50` — look for `executable file not found`; check the **Claude account** card |
@@ -275,7 +292,7 @@ Start with the [Admin UI](#admin-ui): the status, the reasons and the logs usual
 - **Durability** — messages are written to an on-disk queue (`~/.claude-whatsapp/pending/`) before being acked to gowa and replayed automatically if the bridge died mid-flight.
 - **One `claude -p` per chat at a time** — locked per `chat_id`; further messages for the same chat queue instead of fighting over the same `--resume` session.
 - **Personal and team modes** — one number in DMs, or one group with an approved roster and required @mention; managed from the Admin UI and applied without a restart ([above](#who-can-instruct-the-bot)).
-- **Admin UI** — status, WhatsApp recovery and Claude sign-in ([above](#admin-ui)).
+- **Admin UI** — status, WhatsApp recovery, Claude sign-in and access control, behind its own login ([above](#admin-ui)).
 
 **Not implemented yet:** tool-call approval via emoji reaction, and cross-chat rate limiting (every different chat is its own `claude -p` process, with no cap on how many run in parallel). Contributions and PRs welcome.
 
@@ -287,6 +304,7 @@ claude-whatsapp/
 ├── cmd/admin/main.go                # Admin UI entrypoint
 ├── internal/
 │   ├── admin/                       # Admin UI handlers + web/index.html (embedded)
+│   ├── adminauth/                   # admin login: password hash, sessions, guess limiter
 │   ├── access/                      # who may instruct the bot: personal/team policy, roster, mention detection
 │   ├── config/                      # read & validate .env
 │   ├── gowa/                        # REST client for gowa
