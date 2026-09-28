@@ -45,7 +45,7 @@ Two WhatsApp numbers are involved:
 
 - Linux with **systemd** (tested on a Raspberry Pi 5 / aarch64 Debian 13; also built for armv7 and x86_64)
 - [Docker](https://docs.docker.com/engine/install/) with the Compose plugin, and your user in the `docker` group
-- [Claude Code CLI](https://docs.claude.com/claude-code) installed and on your `PATH` (`npm install -g @anthropic-ai/claude-code`) — signing in can be done after installation, from the Admin UI
+- [Claude Code CLI](https://docs.claude.com/claude-code) installed and on your `PATH` — either `curl -fsSL https://claude.ai/install.sh | bash` (no Node.js needed) or `npm install -g @anthropic-ai/claude-code`; then open a new shell so `claude` is found. Signing in can be done after installation, from the Admin UI
 - A WhatsApp number to use as the bot, and a phone to scan its QR code
 
 Go is **not** needed for this route.
@@ -58,7 +58,7 @@ Run as a **regular user, not with `sudo`**:
 curl -sSL https://raw.githubusercontent.com/tarkiman/claude-whatsapp/main/scripts/quick-install.sh | bash
 ```
 
-The installer downloads a prebuilt release, asks for your **sender number** (your own phone number with country code and no leading 0, e.g. `6281234567890`) and for the **username and password of the admin page** (typed without echo; at least 10 characters with at least 5 different ones — a short phrase of unrelated words works well), creates `.env` with random secrets, starts gowa with Docker Compose, and installs the bridge and admin services. Everything goes into `~/claude-whatsapp`.
+The installer downloads a prebuilt release and first **checks every prerequisite** — if anything is missing it lists it all at once, with how to fix it, and changes nothing. Then it asks for your **sender number** (your own phone number with country code and no leading 0, e.g. `6281234567890`) and for the **username and password of the admin page** (typed without echo; at least 10 characters with at least 5 different ones — a short phrase of unrelated words works well), creates `.env` with random secrets, starts gowa with Docker Compose, and installs the bridge and admin services. Everything goes into `~/claude-whatsapp`.
 
 <details>
 <summary>Installer options</summary>
@@ -283,6 +283,7 @@ Start with the [Admin UI](#admin-ui): the status, the reasons and the logs usual
 | Pairing fails / `is_logged_in: false` forever | The "connected" `state` field is premature — only `is_logged_in: true` can be trusted | `curl .../app/status?device_id=...` |
 | `… is not implemented yet` | gowa's newer device-manager endpoints (`/devices/{id}/login*`) aren't mature in `:latest` | Use the Admin UI or the legacy endpoints (`/app/login*?device_id=`) |
 | Sent a photo/document, Claude says it can't read the file (permission denied) | gowa stores attachments as `0600` owned by the container's internal user | Make sure the sidecar is running: `docker ps \| grep media-perms-fix`; if missing, `docker compose up -d` |
+| Installer: "the installation cannot start yet — N prerequisite(s) missing" | Docker, the Compose plugin, access to the Docker daemon, the `claude` CLI on your `PATH`, or systemd is missing | Each missing piece is listed with the command to fix it and nothing was changed — fix them and run the same command again |
 | Installer: "could not find a release" | No release for your architecture yet, or GitHub is unreachable | Install manually (above) |
 
 ## Features

@@ -45,7 +45,7 @@ Ada dua nomor WhatsApp yang berperan:
 
 - Linux dengan **systemd** (dites di Raspberry Pi 5 / aarch64 Debian 13; dibangun juga untuk armv7 dan x86_64)
 - [Docker](https://docs.docker.com/engine/install/) + plugin Docker Compose, dan user Anda ada di grup `docker`
-- [Claude Code CLI](https://docs.claude.com/claude-code) terpasang dan ada di `PATH` (`npm install -g @anthropic-ai/claude-code`) — login akunnya bisa dilakukan sesudah instalasi, lewat Admin UI
+- [Claude Code CLI](https://docs.claude.com/claude-code) terpasang dan ada di `PATH` — bisa lewat `curl -fsSL https://claude.ai/install.sh | bash` (tanpa Node.js) atau `npm install -g @anthropic-ai/claude-code`; lalu buka shell baru supaya `claude` ditemukan. Login akunnya bisa dilakukan sesudah instalasi, lewat Admin UI
 - Sebuah nomor WhatsApp untuk dijadikan bot, dan HP untuk memindai QR-nya
 
 Go **tidak** dibutuhkan untuk cara ini.
@@ -58,7 +58,7 @@ Jalankan sebagai **user biasa, bukan `sudo`**:
 curl -sSL https://raw.githubusercontent.com/tarkiman/claude-whatsapp/main/scripts/quick-install.sh | bash
 ```
 
-Installer mengunduh rilis siap pakai, menanyakan **nomor pengirim** Anda (nomor HP Anda dengan kode negara, tanpa 0 di depan — mis. `6281234567890`) dan **username serta password halaman admin** (diketik tanpa tampil di layar; minimal 10 karakter dengan minimal 5 karakter berbeda — frasa pendek dari kata-kata yang tidak berhubungan sudah cukup), membuat `.env` dengan secret acak, menjalankan gowa via Docker Compose, dan memasang service bridge + admin. Semuanya masuk ke `~/claude-whatsapp`.
+Installer mengunduh rilis siap pakai dan lebih dulu **memeriksa semua prasyarat** — kalau ada yang kurang, semuanya didaftar sekaligus beserta cara memperbaikinya, dan tidak ada yang diubah. Setelah itu ia menanyakan **nomor pengirim** Anda (nomor HP Anda dengan kode negara, tanpa 0 di depan — mis. `6281234567890`) dan **username serta password halaman admin** (diketik tanpa tampil di layar; minimal 10 karakter dengan minimal 5 karakter berbeda — frasa pendek dari kata-kata yang tidak berhubungan sudah cukup), membuat `.env` dengan secret acak, menjalankan gowa via Docker Compose, dan memasang service bridge + admin. Semuanya masuk ke `~/claude-whatsapp`.
 
 <details>
 <summary>Opsi installer</summary>
@@ -283,6 +283,7 @@ Mulai dari [Admin UI](#admin-ui): status, alasan, dan log biasanya sudah menunju
 | Pairing gagal / `is_logged_in: false` terus | Field `state` "connected" itu prematur — hanya `is_logged_in: true` yang bisa dipercaya | `curl .../app/status?device_id=...` |
 | `… is not implemented yet` | Endpoint device-manager baru (`/devices/{id}/login*`) belum matang di gowa `:latest` | Pakai Admin UI atau endpoint legacy (`/app/login*?device_id=`) |
 | Kirim foto/dokumen, Claude bilang tidak bisa baca file (permission denied) | gowa menyimpan lampiran `0600` milik user internal container | Pastikan sidecar jalan: `docker ps \| grep media-perms-fix`; kalau tidak ada, `docker compose up -d` |
+| Installer: "the installation cannot start yet — N prerequisite(s) missing" | Docker, plugin Compose, akses ke daemon Docker, CLI `claude` di `PATH`, atau systemd belum ada | Setiap kekurangan didaftar beserta perintah perbaikannya dan tidak ada yang diubah — perbaiki lalu jalankan perintah yang sama lagi |
 | Installer: "tidak menemukan rilis" | Belum ada rilis untuk arsitektur Anda, atau tidak bisa mengakses GitHub | Pasang manual (di atas) |
 
 ## Fitur

@@ -131,6 +131,41 @@ normalize_senders() {
 	printf '%s' "$out"
 }
 
+# preflight checks EVERYTHING the installation needs before a single question is
+# asked or a file is written, and reports all that is missing at once with how
+# to fix it — so a failed run leaves nothing behind and needs one retry, not
+# one retry per missing piece.
+preflight() {
+	local problems=() p n=0
+	if ! command -v docker >/dev/null 2>&1; then
+		problems+=("Docker is not installed.
+       Install it: https://docs.docker.com/engine/install/
+       then let your user use it: sudo usermod -aG docker \$USER   (and log in again)")
+	else
+		docker compose version >/dev/null 2>&1 || problems+=("the Docker Compose plugin is missing ('docker compose version' fails).
+       Debian/Ubuntu: sudo apt-get install docker-compose-plugin")
+		docker info >/dev/null 2>&1 || problems+=("cannot talk to the Docker daemon.
+       Make sure it is running (sudo systemctl start docker) and that your user may use it:
+       sudo usermod -aG docker \$USER   (then log in again)")
+	fi
+	command -v claude >/dev/null 2>&1 || problems+=("the Claude Code CLI ('claude') is not on your PATH. Install it with either
+         curl -fsSL https://claude.ai/install.sh | bash     (no Node.js needed)
+         npm install -g @anthropic-ai/claude-code            (needs Node.js)
+       then open a NEW shell (or: export PATH=\"\$HOME/.local/bin:\$PATH\") so that 'claude' is found.
+       You do not have to sign in now — that is done later from the admin page.")
+	command -v systemctl >/dev/null 2>&1 || problems+=("systemd was not found — the bridge runs as a systemd --user service.")
+	[ "${#problems[@]}" -eq 0 ] && return 0
+	echo "The installation cannot start yet — ${#problems[@]} prerequisite(s) missing (nothing was changed):" >&2
+	for p in "${problems[@]}"; do
+		n=$((n + 1))
+		printf '  %d. %s\n' "$n" "$p" >&2
+	done
+	echo >&2
+	echo "Fix the above, then run the same command again." >&2
+	exit 1
+}
+[ "$SKIP_START" -eq 1 ] || preflight
+
 # --- .env ------------------------------------------------------------------
 if [ -f .env ]; then
 	log ".env already exists — keeping it as is (not modified)."
@@ -141,10 +176,25 @@ else
 		[ "$INTERACTIVE" -eq 1 ] || die "--allowed-senders is required together with --non-interactive"
 		echo
 		echo "WhatsApp number allowed to chat with the bot (YOUR OWN phone number, with country"
-		echo "code, no leading 0 — e.g. 6281234567890). Separate several with commas."
-		senders="$(ask "Sender number: ")"
+		echo "code, no leading 0 — e.g. 6281234567890). The bot obeys exactly this one number."
+		while :; do
+			raw="$(ask "Sender number: ")"
+			if ! senders="$(normalize_senders "$raw")"; then continue; fi
+			echo "  You entered: +${senders%%@*}"
+			case "$(ask "  Is that your number, with the right country code? [Y/n] ")" in
+			[nN]*)
+				echo
+				continue
+				;;
+			esac
+			break
+		done
+	else
+		senders="$(normalize_senders "$senders")"
 	fi
-	senders="$(normalize_senders "$senders")"
+	if [[ "$senders" == *,* ]]; then
+		warn "personal mode obeys exactly one number — only the first (${senders%%,*}) is used, the rest are ignored"
+	fi
 
 	log "Creating .env with random secrets..."
 	cp .env.example .env
@@ -164,13 +214,6 @@ if [ "$SKIP_START" -eq 1 ]; then
 	log "--skip-start: .env is ready. Continue yourself: docker compose up -d && scripts/deploy.sh, then bin/admin passwd"
 	exit 0
 fi
-
-# --- prerequisites ------------------------------------------------------------
-command -v docker >/dev/null 2>&1 || die "Docker is not installed — https://docs.docker.com/engine/install/"
-docker compose version >/dev/null 2>&1 || die "the Docker Compose plugin is not installed ('docker compose version' failed)"
-docker info >/dev/null 2>&1 || die "cannot talk to the Docker daemon — make sure it is running and this user is in the docker group (sudo usermod -aG docker \$USER, then log in again)"
-command -v claude >/dev/null 2>&1 || die "Claude Code CLI ('claude') is not on your PATH — npm install -g @anthropic-ai/claude-code (see the README)"
-command -v systemctl >/dev/null 2>&1 || die "systemd not found — the bridge is installed as a systemd --user service"
 
 # --- gowa + services ------------------------------------------------------------
 log "Starting gowa (Docker Compose)..."
