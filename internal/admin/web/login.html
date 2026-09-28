@@ -48,6 +48,7 @@
       <label for="again">Repeat the password</label>
       <input id="again" type="password" autocomplete="new-password">
     </div>
+    <p id="rules" class="muted" style="font-size:12px;margin:8px 0 0" hidden>At least 10 characters, with at least 5 different ones. A short phrase of unrelated words works well (for example three words with spaces).</p>
     <div class="row"><input id="show" type="checkbox"><label for="show" style="margin:0">Show password</label></div>
     <button id="go" type="submit">Sign in</button>
   </form>
@@ -80,7 +81,7 @@ async function init() {
     $('title').textContent = 'Create the admin login';
     $('lead').textContent = 'Choose the username and password you will use to open this page. The password is stored only as a hash.';
     $('user').value = 'admin';
-    $('pass').autocomplete = 'new-password'; $('pass-label').textContent = 'Password (at least 10 characters)';
+    $('pass').autocomplete = 'new-password'; $('pass-label').textContent = 'Password'; $('rules').hidden = false;
     $('again-wrap').hidden = false; $('again').required = true;
     $('go').textContent = 'Create login';
     $('form').hidden = false; $('user').focus();

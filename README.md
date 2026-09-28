@@ -58,7 +58,7 @@ Run as a **regular user, not with `sudo`**:
 curl -sSL https://raw.githubusercontent.com/tarkiman/claude-whatsapp/main/scripts/quick-install.sh | bash
 ```
 
-The installer downloads a prebuilt release, asks for your **sender number** (your own phone number with country code and no leading 0, e.g. `6281234567890`) and for the **username and password of the admin page** (typed without echo, at least 10 characters), creates `.env` with random secrets, starts gowa with Docker Compose, and installs the bridge and admin services. Everything goes into `~/claude-whatsapp`.
+The installer downloads a prebuilt release, asks for your **sender number** (your own phone number with country code and no leading 0, e.g. `6281234567890`) and for the **username and password of the admin page** (typed without echo; at least 10 characters with at least 5 different ones — a short phrase of unrelated words works well), creates `.env` with random secrets, starts gowa with Docker Compose, and installs the bridge and admin services. Everything goes into `~/claude-whatsapp`.
 
 <details>
 <summary>Installer options</summary>
@@ -148,6 +148,7 @@ A status and recovery page at `http://127.0.0.1:8098`, run as its own service (`
 
 The page is behind its own login: **one account**, username and password chosen at install time. The password is stored only as a salted PBKDF2 hash in `~/.claude-whatsapp/admin.json` (mode `0600`), never in `.env`, and never sent anywhere. A session cookie (`HttpOnly`, `SameSite=Strict`) keeps you signed in for up to 12 hours (30 minutes idle); the admin restarting signs everybody out.
 
+- **Password rules:** at least 10 characters, with at least 5 different ones. No digits or symbols are demanded — a short phrase of unrelated words (with spaces) is fine and easier to remember than a jumble. If a password is refused, the message lists every rule it broke, with the numbers.
 - **Change the password** in the *Admin login* card (asks for the current one; every other browser is signed out). **Log out** is at the top right.
 - **Guessing is throttled:** after 5 wrong passwords a client is locked out for 5 minutes, doubling each time it happens again (up to an hour).
 - **Forgot the password?** On the machine itself run `~/claude-whatsapp/bin/admin passwd` (or `bin/admin passwd` in a source checkout). It can only be run there, by a user who can already read the file, so it needs no login. It also lets you rename the account with `--user`.

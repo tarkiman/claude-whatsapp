@@ -62,26 +62,39 @@ func ValidateUsername(u string) error {
 	return nil
 }
 
+// MinDistinctChars keeps "aaaaaaaaaa" out without demanding symbols or digits.
+const MinDistinctChars = 5
+
+// PasswordRules is the requirement in plain words, shown wherever a password
+// is chosen so nobody has to guess it from an error message.
+const PasswordRules = "at least 10 characters, with at least 5 different ones — a short phrase of unrelated words works well"
+
 // ValidatePassword enforces a sane minimum; the real protection is that the
-// hash is slow and guessing is rate-limited.
+// hash is slow and guessing is rate-limited. Every broken rule is reported at
+// once, with the numbers, so one attempt is enough to learn what is needed.
 func ValidatePassword(pw, username string) error {
+	var problems []string
 	n := utf8.RuneCountInString(pw)
-	switch {
-	case n < MinPasswordLen:
-		return fmt.Errorf("password must be at least %d characters", MinPasswordLen)
-	case n > MaxPasswordLen:
-		return fmt.Errorf("password must be at most %d characters", MaxPasswordLen)
-	case strings.EqualFold(pw, username):
-		return errors.New("password must not be the same as the username")
+	if n < MinPasswordLen {
+		problems = append(problems, fmt.Sprintf("it is %d character(s) long and at least %d are needed", n, MinPasswordLen))
+	}
+	if n > MaxPasswordLen {
+		problems = append(problems, fmt.Sprintf("it is longer than the %d characters allowed", MaxPasswordLen))
+	}
+	if username != "" && strings.EqualFold(pw, username) {
+		problems = append(problems, "it is the same as the username")
 	}
 	distinct := map[rune]bool{}
 	for _, r := range pw {
 		distinct[r] = true
 	}
-	if len(distinct) < 5 {
-		return errors.New("password is too repetitive — use at least 5 different characters")
+	if len(distinct) < MinDistinctChars {
+		problems = append(problems, fmt.Sprintf("it uses only %d different character(s) and at least %d are needed (something like aaaaaaaaaa is not accepted)", len(distinct), MinDistinctChars))
 	}
-	return nil
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("password not accepted — %s. Use %s", strings.Join(problems, ", and "), PasswordRules)
 }
 
 func derive(password string, salt []byte, iterations int) ([]byte, error) {

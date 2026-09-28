@@ -58,7 +58,7 @@ Jalankan sebagai **user biasa, bukan `sudo`**:
 curl -sSL https://raw.githubusercontent.com/tarkiman/claude-whatsapp/main/scripts/quick-install.sh | bash
 ```
 
-Installer mengunduh rilis siap pakai, menanyakan **nomor pengirim** Anda (nomor HP Anda dengan kode negara, tanpa 0 di depan — mis. `6281234567890`) dan **username serta password halaman admin** (diketik tanpa tampil di layar, minimal 10 karakter), membuat `.env` dengan secret acak, menjalankan gowa via Docker Compose, dan memasang service bridge + admin. Semuanya masuk ke `~/claude-whatsapp`.
+Installer mengunduh rilis siap pakai, menanyakan **nomor pengirim** Anda (nomor HP Anda dengan kode negara, tanpa 0 di depan — mis. `6281234567890`) dan **username serta password halaman admin** (diketik tanpa tampil di layar; minimal 10 karakter dengan minimal 5 karakter berbeda — frasa pendek dari kata-kata yang tidak berhubungan sudah cukup), membuat `.env` dengan secret acak, menjalankan gowa via Docker Compose, dan memasang service bridge + admin. Semuanya masuk ke `~/claude-whatsapp`.
 
 <details>
 <summary>Opsi installer</summary>
@@ -148,6 +148,7 @@ Status `Down` + "WhatsApp is logged out" berarti sesi WhatsApp dihapus (mis. dev
 
 Halaman ini berada di balik login sendiri: **satu akun**, username dan password dipilih saat instalasi. Password disimpan hanya sebagai hash PBKDF2 ber-salt di `~/.claude-whatsapp/admin.json` (mode `0600`), tidak pernah di `.env`, dan tidak pernah dikirim ke mana pun. Cookie sesi (`HttpOnly`, `SameSite=Strict`) membuat Anda tetap masuk paling lama 12 jam (30 menit kalau tidak aktif); admin yang restart membuat semua orang keluar.
 
+- **Aturan password:** minimal 10 karakter, dengan minimal 5 karakter berbeda. Tidak dipaksa memakai angka atau simbol — frasa pendek dari kata-kata yang tidak berhubungan (dengan spasi) boleh dan lebih mudah diingat daripada deretan acak. Kalau password ditolak, pesannya menyebut semua aturan yang dilanggar, lengkap dengan angkanya.
 - **Ganti password** di kartu *Admin login* (meminta password saat ini; semua browser lain otomatis keluar). **Log out** ada di kanan atas.
 - **Tebakan dibatasi:** setelah 5 password salah, klien dikunci 5 menit, dan menggandakan waktunya setiap kali terulang (sampai satu jam).
 - **Lupa password?** Di mesin itu sendiri jalankan `~/claude-whatsapp/bin/admin passwd` (atau `bin/admin passwd` di checkout source). Perintah ini hanya bisa dijalankan di sana, oleh user yang memang sudah bisa membaca filenya, jadi tidak butuh login. Dengan `--user` Anda juga bisa mengganti nama akun.
