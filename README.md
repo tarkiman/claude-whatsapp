@@ -45,7 +45,7 @@ Two WhatsApp numbers are involved:
 
 - Linux with **systemd** (tested on a Raspberry Pi 5 / aarch64 Debian 13; also built for armv7 and x86_64)
 - [Docker](https://docs.docker.com/engine/install/) with the Compose plugin, and your user in the `docker` group
-- [Claude Code CLI](https://docs.claude.com/claude-code) installed and on your `PATH` — either `curl -fsSL https://claude.ai/install.sh | bash` (no Node.js needed) or `npm install -g @anthropic-ai/claude-code`; then open a new shell so `claude` is found. Signing in can be done after installation, from the Admin UI
+- [Claude Code CLI](https://docs.claude.com/claude-code) installed **as the same regular user that runs the installer** (not as root, not with `sudo` — it goes into that user's home): `curl -fsSL https://claude.ai/install.sh | bash` (no Node.js needed) or `npm install -g @anthropic-ai/claude-code`. The installer also finds a `claude` in `~/.local/bin` that is not on your `PATH` yet. Signing in can be done after installation, from the Admin UI
 - A WhatsApp number to use as the bot, and a phone to scan its QR code
 
 Go is **not** needed for this route.
@@ -284,6 +284,7 @@ Start with the [Admin UI](#admin-ui): the status, the reasons and the logs usual
 | `… is not implemented yet` | gowa's newer device-manager endpoints (`/devices/{id}/login*`) aren't mature in `:latest` | Use the Admin UI or the legacy endpoints (`/app/login*?device_id=`) |
 | Sent a photo/document, Claude says it can't read the file (permission denied) | gowa stores attachments as `0600` owned by the container's internal user | Make sure the sidecar is running: `docker ps \| grep media-perms-fix`; if missing, `docker compose up -d` |
 | Installer: "the installation cannot start yet — N prerequisite(s) missing" | Docker, the Compose plugin, access to the Docker daemon, the `claude` CLI on your `PATH`, or systemd is missing | Each missing piece is listed with the command to fix it and nothing was changed — fix them and run the same command again |
+| Installer says `claude` is missing although I installed it | It was installed as another user (e.g. root — it lives in *that* user's home), or `~/.local/bin` is not on your `PATH` | Install it again as the regular user that runs the installer. The installer already looks in `~/.local/bin`; for your own shell add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` |
 | Installer: "could not find a release" | No release for your architecture yet, or GitHub is unreachable | Install manually (above) |
 
 ## Features

@@ -45,7 +45,7 @@ Ada dua nomor WhatsApp yang berperan:
 
 - Linux dengan **systemd** (dites di Raspberry Pi 5 / aarch64 Debian 13; dibangun juga untuk armv7 dan x86_64)
 - [Docker](https://docs.docker.com/engine/install/) + plugin Docker Compose, dan user Anda ada di grup `docker`
-- [Claude Code CLI](https://docs.claude.com/claude-code) terpasang dan ada di `PATH` — bisa lewat `curl -fsSL https://claude.ai/install.sh | bash` (tanpa Node.js) atau `npm install -g @anthropic-ai/claude-code`; lalu buka shell baru supaya `claude` ditemukan. Login akunnya bisa dilakukan sesudah instalasi, lewat Admin UI
+- [Claude Code CLI](https://docs.claude.com/claude-code) terpasang **sebagai user biasa yang sama dengan yang menjalankan installer** (bukan root, bukan dengan `sudo` — ia masuk ke home user itu): `curl -fsSL https://claude.ai/install.sh | bash` (tanpa Node.js) atau `npm install -g @anthropic-ai/claude-code`. Installer juga menemukan `claude` di `~/.local/bin` yang belum ada di `PATH`. Login akunnya bisa dilakukan sesudah instalasi, lewat Admin UI
 - Sebuah nomor WhatsApp untuk dijadikan bot, dan HP untuk memindai QR-nya
 
 Go **tidak** dibutuhkan untuk cara ini.
@@ -284,6 +284,7 @@ Mulai dari [Admin UI](#admin-ui): status, alasan, dan log biasanya sudah menunju
 | `… is not implemented yet` | Endpoint device-manager baru (`/devices/{id}/login*`) belum matang di gowa `:latest` | Pakai Admin UI atau endpoint legacy (`/app/login*?device_id=`) |
 | Kirim foto/dokumen, Claude bilang tidak bisa baca file (permission denied) | gowa menyimpan lampiran `0600` milik user internal container | Pastikan sidecar jalan: `docker ps \| grep media-perms-fix`; kalau tidak ada, `docker compose up -d` |
 | Installer: "the installation cannot start yet — N prerequisite(s) missing" | Docker, plugin Compose, akses ke daemon Docker, CLI `claude` di `PATH`, atau systemd belum ada | Setiap kekurangan didaftar beserta perintah perbaikannya dan tidak ada yang diubah — perbaiki lalu jalankan perintah yang sama lagi |
+| Installer bilang `claude` tidak ada padahal sudah dipasang | Terpasang sebagai user lain (mis. root — ia ada di home *user itu*), atau `~/.local/bin` belum ada di `PATH` | Pasang lagi sebagai user biasa yang menjalankan installer. Installer sudah mencari di `~/.local/bin`; untuk shell Anda sendiri tambahkan `export PATH="$HOME/.local/bin:$PATH"` ke `~/.bashrc` |
 | Installer: "tidak menemukan rilis" | Belum ada rilis untuk arsitektur Anda, atau tidak bisa mengakses GitHub | Pasang manual (di atas) |
 
 ## Fitur
