@@ -198,6 +198,14 @@ func (h *Handler) transcribeAudioPrompt(ctx context.Context, msg pending.Message
 // same handling as a fresh webhook delivery, just entered from main.go
 // instead of ServeHTTP.
 func (h *Handler) Replay(msg pending.Message) {
+	// The queue may hold a message from a sender who has since been removed
+	// from the allowlist; the allowlist is enforced again here, not only when
+	// the webhook first arrived.
+	if !h.cfg.IsAllowed(msg.ChatID, msg.From) {
+		log.Printf("pending: dropping message %s — sender=%s chat=%s is no longer allowed", msg.MessageID, msg.From, msg.ChatID)
+		h.markDone(msg.MessageID)
+		return
+	}
 	log.Printf("pending: replaying message %s (chat=%s, received %s)", msg.MessageID, msg.ChatID, msg.ReceivedAt.Format(time.RFC3339))
 	h.handleMessage(msg)
 }
