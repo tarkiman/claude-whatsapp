@@ -2,6 +2,16 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.3.1] — 2026-09-29
+
+Found by installing from scratch on a fresh ARM set-top box (Docker present, Claude CLI not).
+
+### Fixed
+
+- **The installer now checks every prerequisite first** (Docker, the Compose plugin, access to the Docker daemon, the `claude` CLI on `PATH`, systemd) — before asking anything and before writing any file — and reports **all** missing pieces at once with the command to fix each. Before, it asked its questions, created `.env`, and only then stopped at the first missing piece, one per attempt. A failed run now changes nothing. `--skip-start` still skips the check.
+- The Claude CLI hint used to mention only `npm`, which is useless on a machine without Node.js; it now also shows the official installer (`curl -fsSL https://claude.ai/install.sh | bash`) and how to make `claude` visible in a new shell.
+- The sender number typed during an interactive install is echoed back for confirmation (a wrong country code such as `685…` for `6285…` was accepted silently). When several numbers are given, the installer says that personal mode obeys exactly one and which one it uses.
+
 ## [0.3.0] — 2026-09-28
 
 ### Upgrade notes (read before upgrading)
