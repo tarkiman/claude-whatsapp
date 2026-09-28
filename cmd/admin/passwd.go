@@ -86,7 +86,7 @@ func runPasswd(e passwdEnv, args []string) int {
 		}
 		var lastErr error
 		for attempt := 0; attempt < 3; attempt++ {
-			pw, err := e.secret("New password (min 10 characters): ")
+			pw, err := e.secret("New password (at least 10 characters, 5 different ones): ")
 			if err != nil {
 				fmt.Fprintln(e.errw, "error:", err)
 				return 1

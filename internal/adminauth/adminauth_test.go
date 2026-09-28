@@ -301,3 +301,55 @@ func TestLimiterLocksOutAndBacksOff(t *testing.T) {
 		t.Fatalf("lock exceeded one hour: %v", wait)
 	}
 }
+
+func TestPasswordErrorsExplainEverythingAtOnce(t *testing.T) {
+	// The user's own experience: two separate attempts, two different
+	// complaints. One attempt must be enough to learn every rule that failed.
+	err := ValidatePassword("aaaa", "admin")
+	if err == nil {
+		t.Fatal("expected a rejection")
+	}
+	for _, want := range []string{
+		"4 character(s) long and at least 10 are needed",
+		"only 1 different character(s) and at least 5 are needed",
+		"Use " + PasswordRules,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message lacks %q:\n%s", want, err)
+		}
+	}
+
+	// Only the rule that failed is mentioned.
+	err = ValidatePassword("abcdefghijklmnop"[:9], "admin")
+	if err == nil || !strings.Contains(err.Error(), "9 character(s)") || strings.Contains(err.Error(), "different character") {
+		t.Errorf("a 9-character password with enough variety should only complain about length: %v", err)
+	}
+	err = ValidatePassword("abababababab", "admin")
+	if err == nil || !strings.Contains(err.Error(), "only 2 different") || strings.Contains(err.Error(), "long and at least") {
+		t.Errorf("a long repetitive password should only complain about variety: %v", err)
+	}
+	if err := ValidatePassword("Administrator", "administrator"); err == nil || !strings.Contains(err.Error(), "same as the username") {
+		t.Errorf("password equal to the username: %v", err)
+	}
+}
+
+func TestPasswordBoundariesAndFriendlyExamples(t *testing.T) {
+	for _, ok := range []string{
+		"abcde12345",           // exactly 10 characters, 10 different
+		"aabbccddee",           // exactly 10 characters, exactly 5 different
+		"kopi hitam pagi hari", // a plain phrase with spaces
+		"kucing biru makan roti",
+	} {
+		if err := ValidatePassword(ok, "admin"); err != nil {
+			t.Errorf("%q should be accepted: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"abcde1234", "aabbccdd11"[:9], "aabbccddaa"} { // 9 chars; 9 chars; 10 chars but 4 different
+		if err := ValidatePassword(bad, "admin"); err == nil {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+	if !strings.Contains(PasswordRules, "10") || !strings.Contains(PasswordRules, "5") {
+		t.Errorf("PasswordRules must state the numbers: %q", PasswordRules)
+	}
+}

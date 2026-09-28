@@ -16,6 +16,7 @@ All notable changes per release. Versions follow [semantic versioning](https://s
 - **Login for the Admin UI**: one account whose password is stored only as a salted PBKDF2-SHA256 hash (600,000 iterations, standard library) in `~/.claude-whatsapp/admin.json` (`ADMIN_AUTH_FILE`, mode `0600`) — never in `.env`.
   - login page, session cookie (`HttpOnly`, `SameSite=Strict`, `Secure` behind TLS), sessions expire after 30 minutes idle / 12 hours;
   - **Change password** card (asks for the current password, signs every other browser out) and **Log out**;
+  - password rules stated up front (at least 10 characters with at least 5 different ones; no digits/symbols demanded, a short phrase works) and a refusal lists every rule it broke, with the numbers;
   - guess throttling: 5 wrong passwords lock a client out for 5 minutes, doubling each time (up to an hour);
   - first-time setup page that only works from the machine itself and only while no account exists;
   - `bin/admin passwd [--user NAME] [--stdin]` to create or reset the login from a terminal — the recovery path for a forgotten password;
