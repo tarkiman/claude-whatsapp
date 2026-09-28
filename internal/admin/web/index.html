@@ -76,6 +76,7 @@
   table.members td.num { font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--muted); }
   .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--code); color: var(--muted); margin-left: 6px; }
   #acc-msg { min-height: 20px; margin: 4px 0; } #acc-msg.err { color: var(--bad); } #acc-msg.okmsg { color: var(--ok); }
+  #pw-msg { min-height: 20px; margin: 4px 0; } #pw-msg.err { color: var(--bad); } #pw-msg.okmsg { color: var(--ok); }
   #msg { min-height: 20px; margin: 4px 0; }
   #msg.err { color: var(--bad); } #msg.okmsg { color: var(--ok); }
 </style>
@@ -86,6 +87,8 @@
     <h1>Claude-WhatsApp</h1>
     <span id="overall" class="pill unknown">checking…</span>
     <span id="updated" class="muted"></span>
+    <span id="whoami" class="muted"></span>
+    <button id="btn-signout" hidden>Log out</button>
   </header>
 
   <ul id="reasons" class="reasons" hidden></ul>
@@ -195,6 +198,19 @@
   </section>
 
   <section class="card">
+    <h2>Admin login</h2>
+    <p style="margin-top:0" class="muted">Signed in as <b id="acct-user">…</b>. The new password needs at least 10 characters. Changing it signs every other browser out.</p>
+    <div class="actions">
+      <input id="pw-current" type="password" autocomplete="current-password" placeholder="current password">
+      <input id="pw-new" type="password" autocomplete="new-password" placeholder="new password">
+      <input id="pw-again" type="password" autocomplete="new-password" placeholder="repeat the new password">
+      <button id="btn-pw">Change password</button>
+    </div>
+    <div id="pw-msg"></div>
+    <p class="muted" style="margin-bottom:0">Forgot it? On the machine itself run <code>bin/admin passwd</code>.</p>
+  </section>
+
+  <section class="card">
     <h2>Logs</h2>
     <div class="tabs">
       <button data-src="bridge" class="on">bridge</button>
@@ -212,6 +228,7 @@ const api = async (path, opts = {}) => {
     headers: { 'X-Admin-Request': '1', 'Content-Type': 'application/json', ...(opts.headers || {}) },
   });
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401 && !path.startsWith('/api/auth/password')) { location.href = '/login'; throw new Error('signed out'); }
   if (!res.ok) throw new Error(body.error || res.statusText);
   return body;
 };
@@ -472,6 +489,29 @@ $('btn-acc-team').onclick = (e) => {
   }, 'Saved. ' + chosen.length + ' member(s) approved; DMs and other groups are ignored. Applies from the next message — no restart.');
 };
 
+// --- Admin login ---
+const pmsg = (t, k) => { const m = $('pw-msg'); m.textContent = t; m.className = k || ''; };
+async function loadWhoAmI() {
+  try {
+    const st = await (await fetch('/api/auth/state')).json();
+    if (st.authenticated) {
+      $('whoami').textContent = 'signed in as ' + st.user; $('acct-user').textContent = st.user; $('btn-signout').hidden = false;
+    }
+  } catch (_) { /* the page still works without the label */ }
+}
+$('btn-signout').onclick = async () => { await post('/api/logout').catch(() => {}); location.href = '/login'; };
+$('btn-pw').onclick = async (e) => {
+  pmsg('');
+  if ($('pw-new').value !== $('pw-again').value) { pmsg('The two new passwords are different.', 'err'); return; }
+  e.target.disabled = true;
+  try {
+    const r = await post('/api/auth/password', { current: $('pw-current').value, new: $('pw-new').value });
+    pmsg(r.ok, 'okmsg');
+    $('pw-current').value = $('pw-new').value = $('pw-again').value = '';
+  } catch (err) { pmsg(err.message, 'err'); }
+  finally { e.target.disabled = false; }
+};
+
 // --- Claude sign-in ---
 let claudePoll = null;
 const cmsg = (t, k) => { const m = $('claude-msg'); m.textContent = t; m.className = k || ''; };
@@ -519,7 +559,7 @@ $('btn-claude-cancel').onclick = async () => {
 };
 api('/api/claude/login').then((l) => { if (l.state === 'waiting_code' || l.state === 'verifying') { renderLogin(l); watchClaudeLogin(); } }).catch(() => {});
 
-refresh(); loadLogs(); loadAccess();
+refresh(); loadLogs(); loadAccess(); loadWhoAmI();
 setInterval(refresh, 10000);
 setInterval(loadLogs, 30000);
 </script>

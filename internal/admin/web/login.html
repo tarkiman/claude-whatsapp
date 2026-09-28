@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — Claude-WhatsApp Admin</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9; --card: #fff; --text: #1a1d21; --muted: #6a7280; --line: #e3e6ea;
+    --ok: #1a7f4b; --bad: #c0362c; --bad-bg: #fde8e6; --warn: #9a6700; --warn-bg: #fff4d6; --accent: #2457d6; --code: #eef0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #101215; --card: #181b20; --text: #e6e8eb; --muted: #949ba7; --line: #2a2f37;
+      --ok: #4cc38a; --bad: #f2776d; --bad-bg: #331815; --warn: #e3b341; --warn-bg: #2d2410; --accent: #6b93f5; --code: #22262d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 16px; }
+  main { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p { margin: 0 0 14px; } .muted { color: var(--muted); }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+  input[type=text], input[type=password] { width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); border-color: var(--accent); }
+  .row { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+  button { width: 100%; margin-top: 16px; font: inherit; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--accent);
+    background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: default; }
+  #msg { margin-top: 12px; padding: 8px 12px; border-radius: 8px; background: var(--bad-bg); color: var(--bad); }
+  .note { background: var(--warn-bg); color: var(--warn); padding: 10px 12px; border-radius: 8px; }
+  code { background: var(--code); border-radius: 5px; padding: 1px 5px; font: 12.5px ui-monospace, monospace; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Claude-WhatsApp Admin</h1>
+  <p id="lead" class="muted">Checking…</p>
+
+  <form id="form" hidden>
+    <label for="user">Username</label>
+    <input id="user" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+    <label for="pass" id="pass-label">Password</label>
+    <input id="pass" type="password" autocomplete="current-password" required>
+    <div id="again-wrap" hidden>
+      <label for="again">Repeat the password</label>
+      <input id="again" type="password" autocomplete="new-password">
+    </div>
+    <div class="row"><input id="show" type="checkbox"><label for="show" style="margin:0">Show password</label></div>
+    <button id="go" type="submit">Sign in</button>
+  </form>
+
+  <div id="blocked" class="note" hidden></div>
+  <div id="msg" hidden></div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const post = async (path, data) => {
+  const res = await fetch(path, { method: 'POST', headers: { 'X-Admin-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+};
+const show = (text) => { const m = $('msg'); m.hidden = !text; m.textContent = text || ''; };
+let mode = 'login';
+
+$('show').onchange = () => { const t = $('show').checked ? 'text' : 'password'; $('pass').type = t; $('again').type = t; };
+
+async function init() {
+  let st;
+  try { st = await (await fetch('/api/auth/state')).json(); }
+  catch (e) { $('lead').textContent = 'Cannot reach the admin backend.'; return; }
+  if (st.authenticated) { location.replace('/'); return; }
+
+  if (st.state === 'setup' && st.setupAllowed) {
+    mode = 'setup';
+    $('title').textContent = 'Create the admin login';
+    $('lead').textContent = 'Choose the username and password you will use to open this page. The password is stored only as a hash.';
+    $('user').value = 'admin';
+    $('pass').autocomplete = 'new-password'; $('pass-label').textContent = 'Password (at least 10 characters)';
+    $('again-wrap').hidden = false; $('again').required = true;
+    $('go').textContent = 'Create login';
+    $('form').hidden = false; $('user').focus();
+  } else if (st.state === 'setup') {
+    $('title').textContent = 'Admin login not set up yet';
+    $('lead').textContent = '';
+    const b = $('blocked'); b.hidden = false;
+    b.textContent = 'First-time setup is only allowed from the machine itself. Open this page on that machine (http://127.0.0.1:8098), or run “bin/admin passwd” in a terminal there.';
+  } else if (st.state === 'broken') {
+    $('title').textContent = 'Login file unusable';
+    $('lead').textContent = '';
+    const b = $('blocked'); b.hidden = false;
+    b.textContent = 'The stored login could not be read (' + (st.error || 'unknown error') + '). Run “bin/admin passwd” in a terminal on the machine to replace it.';
+  } else {
+    $('lead').textContent = 'Sign in to continue.';
+    $('form').hidden = false; $('user').focus();
+  }
+}
+
+$('form').onsubmit = async (e) => {
+  e.preventDefault(); show('');
+  if (mode === 'setup' && $('pass').value !== $('again').value) { show('The two passwords are different.'); return; }
+  $('go').disabled = true;
+  try {
+    await post(mode === 'setup' ? '/api/setup' : '/api/login', { username: $('user').value.trim(), password: $('pass').value });
+    location.replace('/');
+  } catch (err) {
+    show(err.message); $('pass').value = ''; $('again').value = ''; $('pass').focus(); $('go').disabled = false;
+  }
+};
+init();
+</script>
+</body>
+</html>

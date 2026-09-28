@@ -8,7 +8,6 @@ package admin
 
 import (
 	"context"
-	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -24,6 +23,7 @@ import (
 	"time"
 
 	"github.com/tarkiman/claude-whatsapp/internal/access"
+	"github.com/tarkiman/claude-whatsapp/internal/adminauth"
 	"github.com/tarkiman/claude-whatsapp/internal/config"
 	"github.com/tarkiman/claude-whatsapp/internal/gowa"
 )
@@ -49,8 +49,9 @@ type Options struct {
 	// AllowedHosts are the Host header values (no port) accepted in addition
 	// to localhost/127.0.0.1/::1 — the address(es) the UI is served on.
 	AllowedHosts []string
-	// Password, if set, enables HTTP basic auth (user "admin") on everything.
-	Password string
+	// KDFIterations overrides the PBKDF2 cost of the stored password (tests
+	// only; 0 selects the production default).
+	KDFIterations int
 }
 
 type Server struct {
@@ -61,6 +62,11 @@ type Server struct {
 
 	access *access.Store
 
+	creds     *adminauth.Store
+	sessions  *adminauth.Sessions
+	limiter   *adminauth.Limiter
+	failDelay time.Duration // pause after a wrong password, slows guessing
+
 	claudeMu  sync.Mutex
 	claudeAt  time.Time
 	claudeVal *ClaudeInfo
@@ -70,11 +76,23 @@ type Server struct {
 
 func New(cfg *config.Config, g *gowa.Client, opts Options) *Server {
 	legacy, _ := access.Legacy(cfg.AllowedSenders)
-	s := &Server{cfg: cfg, gowa: g, mux: http.NewServeMux(), opts: opts, access: access.Open(cfg.AccessFile, legacy)}
+	s := &Server{
+		cfg: cfg, gowa: g, mux: http.NewServeMux(), opts: opts, access: access.Open(cfg.AccessFile, legacy),
+		creds:     adminauth.Open(cfg.AdminAuthFile, opts.KDFIterations),
+		sessions:  adminauth.NewSessions(sessionIdle, sessionMax),
+		limiter:   adminauth.NewLimiter(5, 10*time.Minute, 5*time.Minute),
+		failDelay: 300 * time.Millisecond,
+	}
 
 	sub, _ := fs.Sub(webFS, "web")
 	s.mux.Handle("/", http.FileServer(http.FS(sub)))
 
+	s.mux.HandleFunc("GET /login", s.handleLoginPage)
+	s.mux.HandleFunc("GET /api/auth/state", s.handleAuthState)
+	s.mux.HandleFunc("POST /api/setup", s.handleSetup)
+	s.mux.HandleFunc("POST /api/login", s.handleLogin)
+	s.mux.HandleFunc("POST /api/logout", s.handleSignOut)
+	s.mux.HandleFunc("POST /api/auth/password", s.handleChangePassword)
 	s.mux.HandleFunc("GET /api/status", s.handleStatus)
 	s.mux.HandleFunc("GET /api/logs", s.handleLogs)
 	s.mux.HandleFunc("POST /api/wa/qr", s.handleQR)
@@ -94,7 +112,7 @@ func New(cfg *config.Config, g *gowa.Client, opts Options) *Server {
 	return s
 }
 
-func (s *Server) Handler() http.Handler { return s.guard(s.mux) }
+func (s *Server) Handler() http.Handler { return s.guard(s.authGate(s.mux)) }
 
 func (s *Server) clientAllowed(remoteAddr string) bool {
 	host, _, err := net.SplitHostPort(remoteAddr)
@@ -133,24 +151,16 @@ func (s *Server) hostAllowed(hostHeader string) bool {
 	return false
 }
 
-// guard defends the admin surface. Order matters: first drop clients outside
-// the allowed networks, then check the optional password, then defend against
-// the two ways a web page in an authorised operator's browser can still reach
-// it — DNS rebinding (Host header) and cross-site POSTs (Origin plus a custom
-// header that forces a CORS preflight).
+// guard defends the admin surface at the network level. Order matters: first
+// drop clients outside the allowed networks, then defend against the two ways
+// a web page in an authorised operator's browser can still reach it — DNS
+// rebinding (Host header) and cross-site POSTs (Origin plus a custom header
+// that forces a CORS preflight). The login is checked afterwards by authGate.
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.clientAllowed(r.RemoteAddr) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
-		}
-		if s.opts.Password != "" {
-			_, pass, ok := r.BasicAuth()
-			if !ok || subtle.ConstantTimeCompare([]byte(pass), []byte(s.opts.Password)) != 1 {
-				w.Header().Set("WWW-Authenticate", `Basic realm="claude-whatsapp admin"`)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
 		}
 		if !s.hostAllowed(r.Host) {
 			http.Error(w, "forbidden host", http.StatusForbidden)
@@ -171,6 +181,23 @@ func (s *Server) guard(next http.Handler) http.Handler {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
+	})
+}
+
+// authGate lets a request through only with a live login session, except for
+// the login page and its own endpoints. API calls get a 401, page loads are
+// sent to the login page.
+func (s *Server) authGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isPublicPath(r.URL.Path) || s.sessionOK(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "login required", "login": "/login"})
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusFound)
 	})
 }
 

@@ -20,7 +20,7 @@ Dibangun 2026-08-28, dan dikembangkan serta dipakai sehari-hari di Raspberry Pi 
 | **claude CLI** | `@anthropic-ai/claude-code` (npm) | Otak sesungguhnya — satu subprocess call per pesan, mode print (`-p`), di-*resume* per `chat_id`. |
 | **sessions.json** | File JSON lokal | Peta `chat_id → claude session_id`, supaya panggilan `claude -p` berikutnya untuk chat yang sama pakai `--resume`. |
 | **pending/*.json** | File JSON lokal | Antrian durable — satu file per pesan yang sudah di-ack ke gowa tapi belum selesai dibalas. Lihat [§8](#8-durability-pesan). |
-| **admin UI** | Go (repo ini), proses terpisah | Status, pemulihan WhatsApp, login Claude, dan editor kebijakan akses. Unit systemd sendiri, jadi tetap bisa dibuka saat bridge mati. Lihat [§16](#16-admin-ui--installer). |
+| **admin UI** | Go (repo ini), proses terpisah | Status, pemulihan WhatsApp, login Claude, dan editor kebijakan akses, di balik login sendiri. Unit systemd sendiri, jadi tetap bisa dibuka saat bridge mati. Lihat [§16](#16-admin-ui--installer). |
 | **access.json** | File JSON lokal | Kebijakan akses — mode personal atau tim, satu nomor / grup beserta anggota yang disetujui. Ditulis admin UI, dibaca ulang bridge saat berubah. Lihat [§10](#10-access-control-mode-personal-dan-tim). |
 
 ```mermaid
@@ -131,13 +131,14 @@ sequenceDiagram
 ```
 claude-whatsapp/
 ├── cmd/bridge/main.go          # entrypoint: wiring komponen, replay pending saat startup, HTTP server
-├── cmd/admin/main.go           # entrypoint Admin UI — lihat §16
+├── cmd/admin/main.go           # entrypoint Admin UI — lihat §16 (juga `admin passwd`, di passwd.go)
 ├── internal/
 │   ├── config/config.go        # baca .env, validasi (ALLOWED_SENDERS & WEBHOOK_SECRET wajib)
 │   ├── access/access.go        # kebijakan akses: mode personal/tim, roster, deteksi mention, penyimpanan access.json — §10
 │   ├── gowa/client.go          # REST client tipis ke gowa (SendMessage, SetChatPresence, React)
 │   ├── gowa/admin.go           # operasi device untuk Admin UI (status, QR, pair code, logout)
 │   ├── admin/                  # Admin UI: handler, guard jaringan, login Claude, web/index.html — §16
+│   ├── adminauth/              # login admin: hash password (PBKDF2), sesi, pembatas tebakan — §16
 │   ├── webhook/
 │   │   ├── handler.go          # verifikasi HMAC, filter, orkestrasi satu siklus pesan
 │   │   ├── media.go            # parsing field lampiran polimorfik + buildPrompt()
@@ -277,8 +278,8 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 - **Yang tidak dicakup kebijakan**: siapa pun yang menguasai akun WhatsApp yang diizinkan menguasai mesin ini (aktifkan verifikasi dua langkah WhatsApp di akun itu), dan teks atau file yang diteruskan pengirim yang sah bisa berisi instruksi yang ditujukan ke Claude (prompt injection) — perlakukan konten teruskan seperti menjalankannya sendiri. Di mode tim, setiap anggota yang disetujui dihitung sebagai akun seperti itu.
 - **Basic auth ke gowa**: bridge otentikasi ke REST API gowa pakai `GOWA_BASIC_AUTH_USER/PASSWORD` yang sama dengan yang dipasang di gowa lewat flag `--basic-auth`.
 - **Permission Claude**: subprocess `claude -p` dijalankan dengan `--permission-mode auto` (classifier permission Claude Code bawaan, bukan `--dangerously-skip-permissions`) — tool call yang berisiko tetap butuh persetujuan/diblokir sesuai kebijakan auto-mode yang sama seperti sesi interaktif biasa.
-- **Admin UI**: default hanya `127.0.0.1`. Bind ke alamat lain wajib menyebut IP spesifik (`0.0.0.0` ditolak) dan `ADMIN_ALLOWED_NETS`; IP klien di luar daftar itu ditolak sebelum request diproses. `ADMIN_PASSWORD` (basic auth) **wajib** begitu UI mendengarkan di luar loopback — halaman ini menentukan siapa yang boleh menjalankan perintah di mesin, jadi admin menolak start tanpanya. Header `Host` divalidasi (anti DNS-rebinding), POST wajib membawa header `X-Admin-Request` dan `Origin` yang sama (anti-CSRF), dan proxy gambar QR dibatasi ke direktori QR gowa. Kode OAuth yang ditempel saat login Claude tidak disimpan dan di-redact dari output. Lihat §16.
-- **Secrets**: `.env` (berisi `WEBHOOK_SECRET`, password gowa) di-`.gitignore`, tidak pernah masuk git. `.env.example` cuma placeholder.
+- **Admin UI**: default hanya `127.0.0.1`; bind ke alamat lain wajib menyebut IP spesifik (`0.0.0.0` ditolak) dan `ADMIN_ALLOWED_NETS` (IP klien di luar daftar itu ditolak sebelum apa pun diproses). Setiap request lalu butuh **sesi login** (§16): satu akun yang passwordnya hanya disimpan sebagai hash PBKDF2-SHA256 ber-salt (600.000 iterasi, `crypto/pbkdf2` stdlib, tanpa dependensi) di file `0600`; token sesi acak 256-bit disimpan di memori (30 menit idle / 12 jam maksimum, dibatalkan saat password berubah — dari UI maupun `bin/admin passwd`); password salah dibatasi per klien (5 percobaan, lalu penguncian yang menggandakan waktunya sampai satu jam); perbandingan waktu-konstan dengan kerja yang sama entah username cocok atau tidak. Setup pertama lewat web hanya diterima dari klien loopback dan hanya selama belum ada akun, dan file kredensial yang tidak terbaca tidak pernah dianggap "belum disetel". Selain itu: header `Host` divalidasi (anti DNS-rebinding), POST — termasuk login — butuh header `X-Admin-Request` dan `Origin` yang sama (anti-CSRF), cookie `HttpOnly` + `SameSite=Strict` (+ `Secure` di balik TLS), dan proxy gambar QR dibatasi ke direktori QR gowa. Kode OAuth yang ditempel saat login Claude tidak disimpan dan di-redact dari output. Transportnya sendiri HTTP biasa kecuali Anda memasang TLS di depannya.
+- **Secrets**: `.env` (berisi `WEBHOOK_SECRET`, password gowa) di-`.gitignore`, tidak pernah masuk git; `.env.example` cuma placeholder. Password admin sama sekali tidak ada di `.env` — hanya hash-nya, di `~/.claude-whatsapp/admin.json` (`0600`).
 - **Bukan sandbox**: proses `claude -p` jalan sebagai user Linux biasa yang menjalankan bridge — akses filesystem/perintahnya sama persis dengan yang dimiliki user itu di mesin tersebut. Kalau user itu punya `sudo` tanpa password (umum di setup single-user seperti Raspberry Pi pribadi), Claude yang dipicu lewat WhatsApp juga bisa menjalankan `sudo` — dan ini **benar-benar terjadi** saat implementasi §7.1 (`apt-get install cmake`, `mkdir`/`chown` untuk `data/whisper/` semuanya lewat `sudo` tanpa password, dipicu dari pesan WhatsApp). `--permission-mode auto` adalah jaring pengaman heuristik (classifier bawaan Claude Code), **bukan** batas keamanan formal seperti container terisolasi — pertimbangkan ini sebelum memberi bridge akses ke akun dengan privilese luas.
 
 ## 12. Belum diimplementasikan
@@ -311,14 +312,15 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 | `ADMIN_ADDR` | admin | `127.0.0.1:8098` | Daftar `host:port` (pisah koma) tempat Admin UI listen. Non-loopback wajib IP spesifik + `ADMIN_ALLOWED_NETS`. Alamat yang belum ada saat boot dicoba ulang tiap 5 detik |
 | `ADMIN_ALLOWED_NETS` | admin | (kosong) | CIDR klien yang boleh konek, pisah koma (loopback selalu boleh). **Wajib** kalau `ADMIN_ADDR` berisi alamat non-loopback |
 | `ADMIN_ALLOWED_HOSTS` | admin | (kosong) | Nama `Host` tambahan yang diterima (host dari `ADMIN_ADDR` otomatis) |
-| `ADMIN_PASSWORD` | admin | (kosong) | Basic auth (user `admin`) untuk setiap request. **Wajib** kalau `ADMIN_ADDR` mendengarkan di luar loopback |
+| `ADMIN_AUTH_FILE` | admin | `~/.claude-whatsapp/admin.json` | Tempat login admin (username + hash password) disimpan, `0600`. Dibuat oleh installer, halaman setup di mesin itu, atau `bin/admin passwd` |
+| `ADMIN_PASSWORD`, `ADMIN_USER` | admin | (kosong) | **Hanya bootstrap lama.** Kalau belum ada file login, password ini di-hash menjadi file itu pada start pertama (user `ADMIN_USER`, default `admin`); setelah file ada, diabaikan. Basic auth sudah tidak ada |
 
 ## 14. Deployment & persistence
 
 - **gowa + sidecar**: Docker Compose, `docker compose up -d` (menjalankan `gowa` dan `gowa-media-perms-fix` sekaligus). Persistence koneksi WhatsApp ada di volume `./data/whatsapp` (sqlite whatsmeow store); lampiran media di `./data/statics`.
 - **bridge**: dibangun jadi binary native (`go build -o bin/bridge ./cmd/bridge`), dipasang sebagai `systemd --user` service (`deploy/claude-whatsapp.service.template`, di-generate `scripts/deploy.sh` dengan path & `$PATH` mesin masing-masing) — `Restart=always`, `RestartSec=5`. Tidak ada TTY/prompt interaktif sama sekali — restart otomatis systemd langsung jalan bersih, tanpa langkah tambahan.
-- **admin UI**: binary kedua (`bin/admin`) dan unit (`claude-whatsapp-admin.service`) yang dipasang oleh `scripts/deploy.sh` yang sama; default hanya loopback, `ADMIN_PASSWORD` wajib di luar loopback ([§16](#16-admin-ui--installer)).
-- **install / upgrade**: `scripts/quick-install.sh` → `scripts/install.sh` → `scripts/deploy.sh`. Menjalankannya lagi = upgrade di tempat dan tidak pernah menyentuh `.env`, `data/`, atau `access.json`. `deploy.sh` juga membuat `ADMIN_PASSWORD` kalau `ADMIN_ADDR` yang sudah ada mendengarkan di luar loopback tanpa password, jadi upgrade dari v0.1.x tidak membuat admin menolak start.
+- **admin UI**: binary kedua (`bin/admin`) dan unit (`claude-whatsapp-admin.service`) yang dipasang oleh `scripts/deploy.sh` yang sama; default hanya loopback, di balik login sendiri ([§16](#16-admin-ui--installer)); `bin/admin passwd` menyetel atau mereset login dari terminal.
+- **install / upgrade**: `scripts/quick-install.sh` → `scripts/install.sh` → `scripts/deploy.sh`. Installer menanyakan username dan password admin (atau membaca `ADMIN_PASSWORD` dari environment-nya saat non-interaktif) lalu menjalankan `bin/admin passwd`; menjalankannya lagi = upgrade di tempat dan tidak pernah menyentuh `.env`, `data/`, `access.json`, atau `admin.json`. `deploy.sh` hanya memberi tahu kalau admin mendengarkan di luar loopback dan belum ada login. Upgrade dari v0.2.0 mengadopsi `ADMIN_PASSWORD` lama secara otomatis.
 - Redeploy setelah ubah kode: `scripts/deploy.sh` (idempotent — build ulang, `daemon-reload`, `restart` eksplisit supaya binary baru benar-benar terpakai, bukan cuma `enable --now` yang diam-diam skip restart kalau service sudah jalan). **Ingat**: tiap restart mematikan proses `claude -p` yang sedang jalan — normal untuk deploy sesekali, tapi hindari redeploy berkali-kali beruntun saat ada percakapan aktif (lihat [§9](#9-kunci-per-chat-concurrency) untuk kenapa ini pernah jadi masalah).
 - Cek status: `systemctl --user status claude-whatsapp.service`, `docker logs claude-whatsapp-gowa`, `docker ps` (pastikan `gowa-media-perms-fix` juga `Up`), `journalctl --user -u claude-whatsapp.service -f`.
 
@@ -349,12 +351,16 @@ Detail lengkap format payload webhook: `docs/webhook-payload.md` di [repo gowa](
 |---|---|
 | `GET /api/status` | Gabungan: unit systemd bridge + `/health`, antrian pending, jumlah chat, container Docker, status device gowa (`/app/status`), dan `claude auth status`. Menghasilkan verdict `ok` / `degraded` / `down` beserta alasannya |
 | `GET/POST /api/access`, `GET /api/access/groups`, `GET /api/access/members?group=` | Kartu "Who can instruct the bot": baca/simpan kebijakan akses, daftar grup bot, daftar anggota grup beserta status persetujuannya. Menyimpan memvalidasi lalu menulis `access.json` secara atomik; bridge memakainya pada pesan berikutnya |
+| `GET /login`, `GET /api/auth/state`, `POST /api/login`, `POST /api/setup` | Satu-satunya rute publik: halaman login dan endpoint-nya. `state` bernilai `login`, `setup`, atau `broken`; `setup` hanya bisa dijalankan dari klien loopback |
+| `POST /api/logout`, `POST /api/auth/password` | Keluar; ganti password (butuh yang sekarang, dibatasi lajunya, mengeluarkan semua sesi lain) |
 | `GET /api/logs` | `journalctl` bridge atau `docker logs` gowa |
 | `POST /api/wa/qr`, `GET /api/wa/qr.png`, `POST /api/wa/pair-code`, `GET /api/wa/status` | Pairing WhatsApp. Kalau gowa belum punya device, satu device baru dibuat otomatis |
 | `POST /api/wa/reconnect`, `POST /api/wa/logout` | Pemulihan koneksi / unlink (logout wajib membawa `confirm: "LOGOUT"`) |
 | `GET/POST /api/claude/login[/start\|/code\|/cancel]` | Login Claude — lihat di bawah |
 
 Catatan perilaku gowa yang memengaruhi desainnya: daftar device diambil dari `GET /devices` (bukan `/app/devices`, yang menjawab 400 saat registry kosong), dan `/app/logout` pada sesi yang sudah mati tetap menghapus record device tetapi lalu mengembalikan error — Admin UI menganggapnya sukses selama device-nya hilang sesudahnya.
+
+**Login admin** (`internal/adminauth`, `internal/admin/auth.go`). `authGate` berada di belakang `guard` jaringan: tanpa sesi yang hidup, panggilan API mendapat `401` dan pemuatan halaman dialihkan ke `/login`. Sesi terikat pada fingerprint password (salt-nya), jadi mengganti password di mana pun — UI, atau `bin/admin passwd` yang dijalankan saat admin hidup — mengeluarkan semua browser. Akun dibuat oleh installer, oleh halaman setup di mesin itu sendiri, atau oleh `bin/admin passwd` (juga jalur pemulihan kalau password lupa: tidak butuh login karena hanya bisa dijalankan di host, oleh user yang memang sudah bisa membaca filenya). Password yang diberikan cara lama (`ADMIN_PASSWORD` di `.env`) diadopsi sekali pada start pertama. Paket ini tidak butuh modul pihak ketiga.
 
 **Login Claude dari UI** menjalankan `claude auth login --claudeai|--console` sebagai subprocess dengan stdin pipe, mengambil URL `https://…` pertama dari outputnya, lalu menulis kode yang ditempel operator ke stdin (prompt `Paste code here if prompted >`). PKCE verifier tidak pernah keluar dari proses `claude`. Hanya satu sesi login aktif sekaligus, dibatasi 10 menit, dan tiap run diberi nomor generasi supaya proses lama yang baru selesai tidak menimpa state run baru. Kredensial `claude` berlaku untuk seluruh user Linux (semua sesi Claude Code), bukan hanya bridge. Alur ini diuji dengan skrip `claude` tiruan yang meniru transkrip CLI; jika format output CLI berubah di versi mendatang, jalur cadangannya tetap `claude auth login` di terminal.
 

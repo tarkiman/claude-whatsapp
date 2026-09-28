@@ -4,7 +4,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -32,26 +31,21 @@ func TestGuard(t *testing.T) {
 		remote  string
 		host    string
 		headers map[string]string
-		auth    string // "user:pass" for basic auth
 		want    int
 	}{
-		{"loopback GET", Options{}, "GET", "127.0.0.1:5000", "127.0.0.1:8098", nil, "", 200},
-		{"localhost GET", Options{}, "GET", "127.0.0.1:5000", "localhost:8098", nil, "", 200},
-		{"rebinding host", Options{}, "GET", "127.0.0.1:5000", "evil.example:8098", nil, "", 403},
-		{"POST without admin header", Options{}, "POST", "127.0.0.1:5000", "localhost:8098", nil, "", 403},
-		{"POST with header", Options{}, "POST", "127.0.0.1:5000", "localhost:8098", admin, "", 200},
-		{"POST cross-origin", Options{}, "POST", "127.0.0.1:5000", "localhost:8098", map[string]string{adminHeader: "1", "Origin": "http://evil.example"}, "", 403},
-		{"POST same-origin", Options{}, "POST", "127.0.0.1:5000", "localhost:8098", map[string]string{adminHeader: "1", "Origin": "http://localhost:8098"}, "", 200},
+		{"loopback GET", Options{}, "GET", "127.0.0.1:5000", "127.0.0.1:8098", nil, 200},
+		{"localhost GET", Options{}, "GET", "127.0.0.1:5000", "localhost:8098", nil, 200},
+		{"rebinding host", Options{}, "GET", "127.0.0.1:5000", "evil.example:8098", nil, 403},
+		{"POST without admin header", Options{}, "POST", "127.0.0.1:5000", "localhost:8098", nil, 403},
+		{"POST with header", Options{}, "POST", "127.0.0.1:5000", "localhost:8098", admin, 200},
+		{"POST cross-origin", Options{}, "POST", "127.0.0.1:5000", "localhost:8098", map[string]string{adminHeader: "1", "Origin": "http://evil.example"}, 403},
+		{"POST same-origin", Options{}, "POST", "127.0.0.1:5000", "localhost:8098", map[string]string{adminHeader: "1", "Origin": "http://localhost:8098"}, 200},
 
-		{"LAN client not allowed by default", Options{}, "GET", "192.168.1.50:5000", "localhost:8098", nil, "", 403},
-		{"LAN client in allowed net", Options{AllowedNets: mustNets(t, "192.168.1.0/24"), AllowedHosts: []string{"192.168.1.20"}}, "GET", "192.168.1.50:5000", "192.168.1.20:8098", nil, "", 200},
-		{"ZeroTier client in allowed net", Options{AllowedNets: mustNets(t, "192.168.1.0/24", "10.147.0.0/16"), AllowedHosts: []string{"10.147.20.15"}}, "GET", "10.147.20.7:5000", "10.147.20.15:8098", nil, "", 200},
-		{"outside client refused", Options{AllowedNets: mustNets(t, "192.168.1.0/24", "10.147.0.0/16")}, "GET", "8.8.8.8:5000", "192.168.1.20:8098", nil, "", 403},
-		{"allowed client but unlisted Host", Options{AllowedNets: mustNets(t, "192.168.1.0/24")}, "GET", "192.168.1.50:5000", "192.168.1.20:8098", nil, "", 403},
-
-		{"password required", Options{Password: "s3cret"}, "GET", "127.0.0.1:5000", "localhost:8098", nil, "", 401},
-		{"wrong password", Options{Password: "s3cret"}, "GET", "127.0.0.1:5000", "localhost:8098", nil, "admin:nope", 401},
-		{"right password", Options{Password: "s3cret"}, "GET", "127.0.0.1:5000", "localhost:8098", nil, "admin:s3cret", 200},
+		{"LAN client not allowed by default", Options{}, "GET", "192.168.1.50:5000", "localhost:8098", nil, 403},
+		{"LAN client in allowed net", Options{AllowedNets: mustNets(t, "192.168.1.0/24"), AllowedHosts: []string{"192.168.1.20"}}, "GET", "192.168.1.50:5000", "192.168.1.20:8098", nil, 200},
+		{"ZeroTier client in allowed net", Options{AllowedNets: mustNets(t, "192.168.1.0/24", "10.147.0.0/16"), AllowedHosts: []string{"10.147.20.15"}}, "GET", "10.147.20.7:5000", "10.147.20.15:8098", nil, 200},
+		{"outside client refused", Options{AllowedNets: mustNets(t, "192.168.1.0/24", "10.147.0.0/16")}, "GET", "8.8.8.8:5000", "192.168.1.20:8098", nil, 403},
+		{"allowed client but unlisted Host", Options{AllowedNets: mustNets(t, "192.168.1.0/24")}, "GET", "192.168.1.50:5000", "192.168.1.20:8098", nil, 403},
 	}
 	for _, c := range cases {
 		h := (&Server{opts: c.opts}).guard(ok)
@@ -60,10 +54,6 @@ func TestGuard(t *testing.T) {
 		req.Host = c.host
 		for k, v := range c.headers {
 			req.Header.Set(k, v)
-		}
-		if c.auth != "" {
-			u, p, _ := strings.Cut(c.auth, ":")
-			req.SetBasicAuth(u, p)
 		}
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)

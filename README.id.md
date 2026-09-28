@@ -37,7 +37,7 @@ Ada dua nomor WhatsApp yang berperan:
 - **Kebijakan akses adalah satu-satunya gerbang — lindungi akun yang ada di dalamnya.** Apa pun dari nomor yang tidak diizinkan diabaikan sebelum ada yang dijalankan (pencocokannya persis, lihat [`docs/ARCHITECTURE.id.md` §10](docs/ARCHITECTURE.id.md#10-access-control-mode-personal-dan-tim)), dan file kebijakan yang rusak membuat semua orang ditolak. Tapi siapa pun yang menguasai akun WhatsApp yang diizinkan menguasai mesin ini, jadi aktifkan verifikasi dua langkah WhatsApp untuknya. Konten yang diteruskan orang yang diizinkan (pesan, dokumen) juga bisa berisi instruksi yang ditujukan ke Claude — perlakukan konten teruskan seperti sesuatu yang akan Anda jalankan sendiri.
 - **Klien WhatsApp tidak resmi.** gowa/whatsmeow bukan produk resmi WhatsApp; penggunaannya bisa bertentangan dengan ketentuan layanan dan berisiko membuat akun dibatasi. Pakai dengan risiko sendiri — sebaiknya dengan nomor khusus.
 - **Rahasiakan `.env` dan `data/`.** `.env` berisi secret webhook dan password gowa; `data/whatsapp/` adalah sesi WhatsApp yang aktif (akses penuh ke akun bot). Keduanya ada di `.gitignore` — jangan pernah di-commit atau dibagikan.
-- **Admin UI hanya untuk Anda.** Halaman admin bisa menautkan ulang WhatsApp dan mengganti login Claude. Default-nya cuma bisa dibuka dari mesin itu sendiri; jangan diekspos ke internet. Lihat [Admin UI](#admin-ui).
+- **Admin UI hanya untuk Anda.** Halaman admin bisa menautkan ulang WhatsApp, mengganti login Claude, dan menentukan siapa yang boleh memerintah bot. Ia punya login sendiri (username + password, hanya hash-nya yang disimpan), default-nya cuma bisa dibuka dari mesin itu sendiri, dan tidak boleh diekspos ke internet. Lihat [Admin UI](#admin-ui).
 
 ## Mulai cepat
 
@@ -58,7 +58,7 @@ Jalankan sebagai **user biasa, bukan `sudo`**:
 curl -sSL https://raw.githubusercontent.com/tarkiman/claude-whatsapp/main/scripts/quick-install.sh | bash
 ```
 
-Installer mengunduh rilis siap pakai, menanyakan **nomor pengirim** Anda (nomor HP Anda dengan kode negara, tanpa 0 di depan — mis. `6281234567890`), membuat `.env` dengan secret acak, menjalankan gowa via Docker Compose, dan memasang service bridge + admin. Semuanya masuk ke `~/claude-whatsapp`.
+Installer mengunduh rilis siap pakai, menanyakan **nomor pengirim** Anda (nomor HP Anda dengan kode negara, tanpa 0 di depan — mis. `6281234567890`) dan **username serta password halaman admin** (diketik tanpa tampil di layar, minimal 10 karakter), membuat `.env` dengan secret acak, menjalankan gowa via Docker Compose, dan memasang service bridge + admin. Semuanya masuk ke `~/claude-whatsapp`.
 
 <details>
 <summary>Opsi installer</summary>
@@ -72,6 +72,7 @@ curl -sSL .../quick-install.sh | bash -s -- --allowed-senders 6281234567890 --no
 | `--allowed-senders <nomor[,nomor]>` | nomor pengirim, tanpa perlu ditanya interaktif |
 | `--dir <path>` | lokasi instalasi (default `~/claude-whatsapp`) |
 | `--version <tag>` | pasang versi tertentu, mis. `v0.1.0` (default: rilis terbaru) |
+| `--admin-user <nama>` | username login halaman admin (kalau tidak diberikan ditanya, default `admin`). Password ditanya tanpa tampil di layar, atau — saat non-interaktif — dibaca dari *variabel lingkungan* `ADMIN_PASSWORD` (bukan flag, supaya tidak masuk riwayat shell) |
 | `--gowa-port <port>` | port gowa di host (default `3011`) |
 | `--tarball <file>` | pakai tarball rilis lokal alih-alih mengunduh |
 | `--skip-start` | cuma siapkan `.env`, jangan jalankan Docker/service |
@@ -81,7 +82,9 @@ curl -sSL .../quick-install.sh | bash -s -- --allowed-senders 6281234567890 --no
 
 ### 3. Tautkan WhatsApp
 
-Buka Admin UI di **http://127.0.0.1:8098** (dari komputer lain: [SSH tunnel](#akses-dari-komputer-lain)). Kartu **WhatsApp recovery** → **Show pairing QR**, lalu di HP bot: *WhatsApp → Perangkat tertaut → Tautkan perangkat* dan pindai QR-nya. QR berlaku 30 detik; halaman menampilkan status berhasil sendiri. Kalau lebih mudah dengan kode, isi nomor bot lalu **Get code**.
+Buka Admin UI di **http://127.0.0.1:8098** (dari komputer lain: [SSH tunnel](#akses-dari-komputer-lain)) dan masuk dengan username serta password yang Anda pilih saat instalasi. Di kartu **WhatsApp recovery** klik **Show pairing QR**, lalu di HP bot: *WhatsApp → Perangkat tertaut → Tautkan perangkat* dan pindai QR-nya. QR berlaku 30 detik; halaman menampilkan status berhasil sendiri. Kalau lebih mudah dengan kode, isi nomor bot lalu **Get code**.
+
+![Halaman login admin](docs/images/login.png)
 
 ![Menautkan WhatsApp lewat QR](docs/images/pair-whatsapp.png)
 
@@ -137,8 +140,19 @@ Halaman status dan pemulihan di `http://127.0.0.1:8098`, berjalan sebagai servic
 - **Siapa yang boleh memerintah bot** — mode personal atau tim, satu nomor, grup beserta anggota yang disetujui ([di atas](#siapa-yang-boleh-memerintah-bot)).
 - **WhatsApp recovery** — Reconnect (coba ini dulu kalau status disconnected), pairing QR, pairing lewat kode, dan **Unlink** untuk pindah ke nomor bot lain.
 - **Sign in / switch Claude account** — login atau ganti akun tanpa membuka terminal.
+- **Login admin** — username dan password (hanya hash yang disimpan), keluar, dan ganti password dari halaman; lihat [di bawah](#login-admin).
 
 Status `Down` + "WhatsApp is logged out" berarti sesi WhatsApp dihapus (mis. device di-unlink dari HP, atau HP utama offline terlalu lama). Bot tidak membalas apa pun sampai ditautkan ulang — dan tidak ada alarm lain yang berbunyi, jadi sesekali cek halaman ini.
+
+### Login admin
+
+Halaman ini berada di balik login sendiri: **satu akun**, username dan password dipilih saat instalasi. Password disimpan hanya sebagai hash PBKDF2 ber-salt di `~/.claude-whatsapp/admin.json` (mode `0600`), tidak pernah di `.env`, dan tidak pernah dikirim ke mana pun. Cookie sesi (`HttpOnly`, `SameSite=Strict`) membuat Anda tetap masuk paling lama 12 jam (30 menit kalau tidak aktif); admin yang restart membuat semua orang keluar.
+
+- **Ganti password** di kartu *Admin login* (meminta password saat ini; semua browser lain otomatis keluar). **Log out** ada di kanan atas.
+- **Tebakan dibatasi:** setelah 5 password salah, klien dikunci 5 menit, dan menggandakan waktunya setiap kali terulang (sampai satu jam).
+- **Lupa password?** Di mesin itu sendiri jalankan `~/claude-whatsapp/bin/admin passwd` (atau `bin/admin passwd` di checkout source). Perintah ini hanya bisa dijalankan di sana, oleh user yang memang sudah bisa membaca filenya, jadi tidak butuh login. Dengan `--user` Anda juga bisa mengganti nama akun.
+- **Belum ada akun** (misalnya setelah instalasi manual atau upgrade dari v0.1.x): halaman login menawarkan *Create the admin login* — **hanya untuk browser di mesin itu sendiri**. Dari tempat lain (LAN, ZeroTier) halamannya hanya meminta Anda melakukannya secara lokal atau menjalankan `bin/admin passwd`, sehingga tidak ada orang lain yang bisa mengklaimnya lebih dulu.
+- Ini tetap HTTP biasa di LAN: password bisa dibaca orang lain di jaringan yang sama, dan cookie tidak bisa diberi flag `Secure`. Pilih ZeroTier (terenkripsi) atau SSH tunnel, atau pasang TLS di depannya; jangan pernah membuka halaman ini ke internet.
 
 ### Akses dari komputer lain
 
@@ -153,10 +167,9 @@ Atau buka langsung dari LAN/[ZeroTier](https://www.zerotier.com/) dengan mengisi
 ```bash
 ADMIN_ADDR=127.0.0.1:8098,192.168.1.20:8098,10.147.20.15:8098   # IP spesifik mesin ini; 0.0.0.0 ditolak
 ADMIN_ALLOWED_NETS=192.168.1.0/24,10.147.0.0/16                  # hanya klien dari jaringan ini yang dilayani
-ADMIN_PASSWORD=<acak-dan-panjang>                                # WAJIB begitu halaman mendengarkan di luar loopback
 ```
 
-Klien di luar `ADMIN_ALLOWED_NETS` langsung ditolak (403), dan IP yang belum ada saat boot (mis. interface ZeroTier) dicoba ulang tiap 5 detik. Ini HTTP biasa, dan halaman ini menentukan siapa yang boleh membuat Claude menjalankan perintah di mesin — jadi `ADMIN_PASSWORD` **wajib** begitu halaman mendengarkan di luar loopback (admin menolak start tanpanya). Jangan pernah membukanya ke internet publik.
+Klien di luar `ADMIN_ALLOWED_NETS` langsung ditolak (403), dan IP yang belum ada saat boot (mis. interface ZeroTier) dicoba ulang tiap 5 detik. Semua yang lolos aturan jaringan tetap harus masuk ([di atas](#login-admin)); selama belum ada akun, mesin lain ditolak. Jangan pernah membuka halaman ini ke internet publik.
 
 ## Konfigurasi
 
@@ -171,7 +184,9 @@ Semua lewat `.env` di direktori instalasi (`chmod 600`; template lengkap dengan 
 | `WEBHOOK_SECRET` | Kunci HMAC antara gowa dan bridge — dibuat acak oleh installer. |
 | `GOWA_BASIC_AUTH_USER/PASSWORD` | Kredensial REST API gowa — password dibuat acak oleh installer. |
 | `WORK_DIR` | Direktori kerja `claude -p` (default `$HOME`; di sinilah `CLAUDE.md` Anda terbaca). |
-| `ADMIN_ADDR`, `ADMIN_ALLOWED_NETS`, `ADMIN_PASSWORD` | Akses Admin UI — lihat [di atas](#akses-dari-komputer-lain). |
+| `ADMIN_ADDR`, `ADMIN_ALLOWED_NETS` | Di mana Admin UI mendengarkan dan jaringan klien mana yang boleh menjangkaunya — lihat [di atas](#akses-dari-komputer-lain). |
+| `ADMIN_AUTH_FILE` | Tempat login admin disimpan (default `~/.claude-whatsapp/admin.json`). |
+| `ADMIN_PASSWORD`, `ADMIN_USER` | **Hanya bootstrap lama:** kalau belum ada file login, password ini di-hash menjadi file itu pada start pertama (user `ADMIN_USER`, default `admin`); setelahnya diabaikan — hapus dari `.env`. |
 
 Untuk mengubah `.env`: edit lalu `systemctl --user restart claude-whatsapp.service claude-whatsapp-admin.service` (dan `docker compose up -d` di direktori instalasi kalau yang diubah menyangkut gowa).
 
@@ -183,7 +198,7 @@ Untuk mengubah `.env`: edit lalu `systemctl --user restart claude-whatsapp.servi
 
 - Bot mulai di **mode personal** dengan nomor pertama di `ALLOWED_SENDERS` (entri tambahan diabaikan, dengan peringatan di log). DM dari nomor itu bekerja persis seperti sebelumnya.
 - **`ALLOWED_GROUPS` tidak lagi mengizinkan siapa pun.** Grup sekarang adalah mode tim: satu grup, roster anggota yang disetujui, dan @mention wajib, diatur di Admin UI.
-- Kalau Admin UI mendengarkan di luar loopback (`ADMIN_ADDR` dengan alamat LAN/ZeroTier), **`ADMIN_PASSWORD` sekarang wajib**. Installer/`scripts/deploy.sh` membuatkannya dan memberi tahu cara membacanya (`grep ADMIN_PASSWORD .env`); browser akan meminta user `admin` dan password itu.
+- **Admin UI sekarang punya login sungguhan, bukan `ADMIN_PASSWORD` di `.env`** (lihat [Login admin](#login-admin)). Dari **v0.2.0**: `ADMIN_PASSWORD` Anda diadopsi otomatis pada start pertama — masuk sebagai `admin` dengan password itu, ganti di kartu *Admin login*, lalu hapus barisnya dari `.env`. Dari **v0.1.x** (tanpa password sama sekali): mesin lain ditolak sampai Anda membuat login — buka halaman di mesin itu sendiri, atau jalankan `bin/admin passwd`. HTTP Basic authentication tidak diterima lagi.
 
 **Uninstall:**
 
@@ -213,7 +228,7 @@ docker compose up -d      # gowa + sidecar perbaikan permission lampiran
 scripts/deploy.sh         # build bridge + admin, pasang service systemd --user (idempotent)
 ```
 
-Lanjutkan dengan [langkah 3 dan 4](#3-tautkan-whatsapp) di atas. `scripts/deploy.sh` aman dijalankan ulang tiap ada perubahan kode (build ulang, regenerate unit dengan path & `$PATH` mesin Anda, restart eksplisit).
+Lalu buat login admin dengan `bin/admin passwd` (Anda ditanya username dan password, tanpa tampil di layar), dan lanjutkan dengan [langkah 3 dan 4](#3-tautkan-whatsapp) di atas. `scripts/deploy.sh` aman dijalankan ulang tiap ada perubahan kode (build ulang, regenerate unit dengan path & `$PATH` mesin Anda, restart eksplisit).
 
 <details>
 <summary>Pairing WhatsApp tanpa Admin UI (curl)</summary>
@@ -256,6 +271,8 @@ Mulai dari [Admin UI](#admin-ui): status, alasan, dan log biasanya sudah menunju
 
 | Gejala | Kemungkinan penyebab | Cek |
 |---|---|---|
+| Tidak bisa masuk ke Admin UI | Username atau password salah; *too many attempts* berarti terkunci sementara (tunggu, atau reset password di mesin) | Di mesin itu sendiri: `bin/admin passwd`. Mulai v0.2.0, `ADMIN_PASSWORD` lama dari `.env` adalah passwordnya sampai Anda menggantinya |
+| Halaman admin bilang pembuatan login hanya bisa di mesin | Belum ada akun dan Anda tidak membuka dari mesin itu sendiri | Buka `http://127.0.0.1:8098` di sana, atau jalankan `bin/admin passwd` |
 | Bot tidak menanggapi @mention saya di grup | Bukan mode tim, pengirim belum dicentang di roster, grupnya bukan yang dipilih, atau teksnya bukan @mention sungguhan ke bot | Admin UI → *Who can instruct the bot*; set `LOG_GROUP_MESSAGES=1` dan baca baris log `group-message:` |
 | Bot diam total, padahal service `active` | Sesi WhatsApp terhapus/di-unlink (Admin UI: `Down` + "logged out"), atau gowa sempat putus koneksi | Admin UI → **Reconnect**, atau pairing ulang. `docker logs claude-whatsapp-gowa` |
 | Tidak ada balasan sama sekali | `claude` tidak ketemu di `$PATH` milik service systemd, atau belum login | `journalctl --user -u claude-whatsapp.service -n 50` — cari `executable file not found`; cek kartu **Claude account** |
@@ -275,7 +292,7 @@ Mulai dari [Admin UI](#admin-ui): status, alasan, dan log biasanya sudah menunju
 - **Durability** — pesan ditulis ke antrian on-disk (`~/.claude-whatsapp/pending/`) sebelum di-ack ke gowa, dan direplay otomatis kalau bridge sempat mati di tengah proses.
 - **Satu `claude -p` per chat pada satu waktu** — dikunci per `chat_id`; pesan lain untuk chat yang sama antre, bukan berebut sesi `--resume` yang sama.
 - **Mode personal dan tim** — satu nomor di DM, atau satu grup dengan roster yang disetujui dan @mention wajib; diatur dari Admin UI dan berlaku tanpa restart ([di atas](#siapa-yang-boleh-memerintah-bot)).
-- **Admin UI** — status, pemulihan WhatsApp, dan login Claude ([di atas](#admin-ui)).
+- **Admin UI** — status, pemulihan WhatsApp, login Claude, dan kontrol akses, di balik login sendiri ([di atas](#admin-ui)).
 
 **Belum diimplementasikan:** approval tool-call lewat reaction emoji, dan rate limiting lintas-chat (tiap chat berbeda = proses `claude -p` sendiri, tanpa batas jumlah paralel). Kontribusi/PR dipersilakan.
 
@@ -287,6 +304,7 @@ claude-whatsapp/
 ├── cmd/admin/main.go                # entrypoint Admin UI
 ├── internal/
 │   ├── admin/                       # handler Admin UI + web/index.html (di-embed)
+│   ├── adminauth/                   # login admin: hash password, sesi, pembatas tebakan
 │   ├── access/                      # siapa yang boleh memerintah bot: kebijakan personal/tim, roster, deteksi mention
 │   ├── config/                      # baca & validasi .env
 │   ├── gowa/                        # REST client ke gowa

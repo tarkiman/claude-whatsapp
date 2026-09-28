@@ -3,8 +3,11 @@
 // By default it listens on 127.0.0.1 only (reach it via an SSH tunnel). To
 // serve it on a LAN or ZeroTier address instead, set ADMIN_ADDR to those
 // specific addresses and ADMIN_ALLOWED_NETS to the client networks that may
-// connect — see .env.example. Listening beyond loopback also requires
-// ADMIN_PASSWORD, because this page decides who may run commands here.
+// connect — see .env.example.
+//
+// The page needs a login (username + password, stored as a hash). Create or
+// reset it with `admin passwd`; on a fresh install the first account can also
+// be created from the setup page, opened on the machine itself.
 package main
 
 import (
@@ -17,11 +20,19 @@ import (
 	"time"
 
 	"github.com/tarkiman/claude-whatsapp/internal/admin"
+	"github.com/tarkiman/claude-whatsapp/internal/adminauth"
 	"github.com/tarkiman/claude-whatsapp/internal/config"
 	"github.com/tarkiman/claude-whatsapp/internal/gowa"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "passwd" {
+		os.Exit(runPasswd(passwdEnv{
+			path: credentialsPath(), in: os.Stdin, out: os.Stdout, errw: os.Stderr,
+			tty: stdinIsTerminal(), secret: ttySecret,
+		}, os.Args[2:]))
+	}
+
 	cfg, err := config.FromEnv()
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -37,7 +48,6 @@ func main() {
 	}
 
 	hosts := splitCSV(os.Getenv("ADMIN_ALLOWED_HOSTS"))
-	beyondLoopback := false
 	for _, a := range addrs {
 		host, _, err := net.SplitHostPort(a)
 		if err != nil || host == "" {
@@ -47,32 +57,48 @@ func main() {
 		if ip != nil && ip.IsUnspecified() {
 			log.Fatalf("ADMIN_ADDR entry %q listens on every interface — list the specific address(es) instead", a)
 		}
-		if !isLoopback(a) {
-			beyondLoopback = true
-		}
 		if !isLoopback(a) && len(nets) == 0 {
 			log.Fatalf("ADMIN_ADDR entry %q is not loopback, so ADMIN_ALLOWED_NETS is required (e.g. 192.168.1.0/24)", a)
 		}
 		hosts = append(hosts, host)
 	}
 
-	password := os.Getenv("ADMIN_PASSWORD")
-	if beyondLoopback && password == "" {
-		// This page decides who may make Claude run commands here, so a network
-		// allowlist alone is not enough once it leaves the machine itself.
-		log.Fatalf("ADMIN_PASSWORD is required when ADMIN_ADDR listens beyond loopback (this page controls who can run commands on this machine) — set a long random value in .env, e.g. ADMIN_PASSWORD=$(openssl rand -hex 16)")
-	}
+	logAuthState(cfg.AdminAuthFile, addrs)
 
 	srv := admin.New(cfg, gowa.New(cfg.GowaBaseURL, cfg.GowaUser, cfg.GowaPass), admin.Options{
 		AllowedNets:  nets,
 		AllowedHosts: hosts,
-		Password:     password,
 	})
 
 	for _, a := range addrs {
 		go serve(a, srv.Handler())
 	}
 	select {}
+}
+
+// logAuthState adopts a password given the old way (ADMIN_PASSWORD in .env) on
+// the first start after an upgrade, and says whether a login exists.
+func logAuthState(path string, addrs []string) {
+	creds := adminauth.Open(path, 0)
+	legacy := os.Getenv("ADMIN_PASSWORD")
+	adopted, err := adminauth.Bootstrap(creds, os.Getenv("ADMIN_USER"), legacy)
+	if err != nil {
+		log.Fatalf("admin: cannot adopt ADMIN_PASSWORD: %v", err)
+	}
+	exists, ferr := creds.State()
+	switch {
+	case adopted:
+		log.Printf("admin: ADMIN_PASSWORD from .env was adopted as the login of user %q and is now stored only as a hash in %s — change it in the UI, then delete ADMIN_PASSWORD from .env", creds.Username(), path)
+	case ferr != nil:
+		log.Printf("admin: the login file is unusable (%v) — nobody can sign in until it is fixed: run `admin passwd` on this machine", ferr)
+	case !exists:
+		log.Printf("admin: no admin login exists yet — open http://%s on this machine to create it, or run `admin passwd` (other machines are refused until then)", addrs[0])
+	default:
+		log.Printf("admin: login enabled for user %q", creds.Username())
+	}
+	if legacy != "" && !adopted && exists {
+		log.Printf("admin: ADMIN_PASSWORD in .env is ignored now that %s exists — delete it from .env", path)
+	}
 }
 
 // serve retries binding forever: a ZeroTier address only exists once its

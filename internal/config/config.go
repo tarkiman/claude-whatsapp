@@ -32,6 +32,9 @@ type Config struct {
 	// by the Admin UI, re-read by the bridge whenever it changes.
 	AccessFile string
 
+	// Where the Admin UI keeps its login (username + password hash, 0600).
+	AdminAuthFile string
+
 	// LOG_GROUP_MESSAGES=1 logs sender, ids and text of group messages (with
 	// the decision taken) to help diagnose @mention detection. Off by default
 	// because it writes message content to the log.
@@ -84,6 +87,7 @@ func FromEnv() (*Config, error) {
 		WorkDir:          getEnv("WORK_DIR", home),
 		SessionStorePath: getEnv("SESSION_STORE_PATH", home+"/.claude-whatsapp/sessions.json"),
 		AccessFile:       getEnv("ACCESS_FILE", home+"/.claude-whatsapp/access.json"),
+		AdminAuthFile:    getEnv("ADMIN_AUTH_FILE", home+"/.claude-whatsapp/admin.json"),
 		LogGroupMessages: os.Getenv("LOG_GROUP_MESSAGES") == "1",
 		PendingDir:       getEnv("PENDING_DIR", home+"/.claude-whatsapp/pending"),
 		MediaDir:         getEnv("GOWA_MEDIA_DIR", "./data/statics"),

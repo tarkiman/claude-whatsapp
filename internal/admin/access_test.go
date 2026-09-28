@@ -23,9 +23,10 @@ const (
 // groups and one group's member list — including a member gowa only knows by
 // LID and one with a hostile display name.
 type accessRig struct {
-	t    *testing.T
-	s    *Server
-	file string
+	t      *testing.T
+	s      *Server
+	file   string
+	cookie *http.Cookie
 }
 
 func newAccessRig(t *testing.T, legacySenders ...string) *accessRig {
@@ -49,9 +50,11 @@ func newAccessRig(t *testing.T, legacySenders ...string) *accessRig {
 	}))
 	t.Cleanup(gw.Close)
 
-	file := filepath.Join(t.TempDir(), "access.json")
-	cfg := &config.Config{AccessFile: file, AllowedSenders: legacySenders}
-	return &accessRig{t: t, s: New(cfg, gowa.New(gw.URL, "", ""), Options{}), file: file}
+	dir := t.TempDir()
+	file := filepath.Join(dir, "access.json")
+	cfg := &config.Config{AccessFile: file, AdminAuthFile: filepath.Join(dir, "admin.json"), AllowedSenders: legacySenders}
+	srv := New(cfg, gowa.New(gw.URL, "", ""), Options{KDFIterations: 1000})
+	return &accessRig{t: t, s: srv, file: file, cookie: signIn(t, srv)}
 }
 
 func (a *accessRig) do(method, path, body string) (int, []byte) {
@@ -62,6 +65,7 @@ func (a *accessRig) do(method, path, body string) (int, []byte) {
 	if method == http.MethodPost {
 		req.Header.Set(adminHeader, "1")
 	}
+	req.AddCookie(a.cookie)
 	rec := httptest.NewRecorder()
 	a.s.Handler().ServeHTTP(rec, req)
 	return rec.Code, rec.Body.Bytes()
@@ -152,6 +156,7 @@ func TestSavePostNeedsTheAdminHeader(t *testing.T) {
 	a := newAccessRig(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/access", strings.NewReader(`{"mode":"personal","personalNumber":"6281234567890"}`))
 	req.RemoteAddr, req.Host = "127.0.0.1:5000", "localhost:8098"
+	req.AddCookie(a.cookie)
 	rec := httptest.NewRecorder()
 	a.s.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
