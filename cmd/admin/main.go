@@ -36,6 +36,7 @@ func main() {
 	}
 
 	hosts := splitCSV(os.Getenv("ADMIN_ALLOWED_HOSTS"))
+	beyondLoopback := false
 	for _, a := range addrs {
 		host, _, err := net.SplitHostPort(a)
 		if err != nil || host == "" {
@@ -45,6 +46,9 @@ func main() {
 		if ip != nil && ip.IsUnspecified() {
 			log.Fatalf("ADMIN_ADDR entry %q listens on every interface — list the specific address(es) instead", a)
 		}
+		if !isLoopback(a) {
+			beyondLoopback = true
+		}
 		if !isLoopback(a) && len(nets) == 0 {
 			log.Fatalf("ADMIN_ADDR entry %q is not loopback, so ADMIN_ALLOWED_NETS is required (e.g. 192.168.1.0/24)", a)
 		}
@@ -52,8 +56,10 @@ func main() {
 	}
 
 	password := os.Getenv("ADMIN_PASSWORD")
-	if password == "" {
-		log.Printf("admin: ADMIN_PASSWORD is not set — access is limited by network only")
+	if beyondLoopback && password == "" {
+		// This page decides who may make Claude run commands here, so a network
+		// allowlist alone is not enough once it leaves the machine itself.
+		log.Fatalf("ADMIN_PASSWORD is required when ADMIN_ADDR listens beyond loopback (this page controls who can run commands on this machine) — set a long random value in .env, e.g. ADMIN_PASSWORD=$(openssl rand -hex 16)")
 	}
 
 	srv := admin.New(cfg, gowa.New(cfg.GowaBaseURL, cfg.GowaUser, cfg.GowaPass), admin.Options{

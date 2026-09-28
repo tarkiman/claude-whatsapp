@@ -63,6 +63,19 @@
   #claude-steps { margin: 8px 0; padding-left: 20px; } #claude-steps li { margin: 6px 0; }
   #claude-msg { min-height: 20px; margin: 4px 0; } #claude-msg.err { color: var(--bad); } #claude-msg.okmsg { color: var(--ok); }
   #claude-code { width: 320px; }
+  .modes { display: flex; gap: 10px; flex-wrap: wrap; margin: 4px 0 10px; }
+  .modes label { flex: 1 1 260px; display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; }
+  input[type=radio], input[type=checkbox] { width: auto; padding: 0; }
+  .modes input { margin-top: 3px; }
+  .modes label:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .warnbox { background: var(--warn-bg); color: var(--warn); border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
+  table.members { width: 100%; border-collapse: collapse; margin: 6px 0; }
+  table.members th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 4px 6px; }
+  table.members td { padding: 5px 6px; border-top: 1px solid var(--line); }
+  table.members th:first-child, table.members td:first-child { text-align: center; }
+  table.members td.num { font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--muted); }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--code); color: var(--muted); margin-left: 6px; }
+  #acc-msg { min-height: 20px; margin: 4px 0; } #acc-msg.err { color: var(--bad); } #acc-msg.okmsg { color: var(--ok); }
   #msg { min-height: 20px; margin: 4px 0; }
   #msg.err { color: var(--bad); } #msg.okmsg { color: var(--ok); }
 </style>
@@ -82,6 +95,54 @@
     <section class="card"><h2>WhatsApp (gowa)</h2><div id="wa"></div></section>
     <section class="card"><h2>Claude account</h2><div id="claude"></div></section>
   </div>
+
+  <section class="card" id="access-card">
+    <h2>Who can instruct the bot</h2>
+    <div class="modes">
+      <label><input type="radio" name="acc-mode" value="personal"><span><b>Personal</b><br>
+        <span class="muted">One phone number, direct messages only. Groups are ignored.</span></span></label>
+      <label><input type="radio" name="acc-mode" value="team"><span><b>Team</b><br>
+        <span class="muted">One WhatsApp group. Approved members only, and only when they @mention the bot.</span></span></label>
+    </div>
+
+    <div id="acc-personal" hidden>
+      <div class="actions">
+        <input id="acc-number" inputmode="tel" autocomplete="off" placeholder="62812… (the one number)">
+        <button id="btn-acc-personal" class="primary">Save personal</button>
+      </div>
+    </div>
+
+    <div id="acc-team" hidden>
+      <div class="warnbox">
+        Everyone ticked below can make Claude read files and run commands on this machine.
+        Tick only people you trust like an administrator. Someone added to the group later
+        is <b>not</b> allowed until you tick them here.
+      </div>
+      <div class="actions">
+        <select id="acc-group"></select>
+        <button id="btn-acc-groups">Load groups</button>
+        <button id="btn-acc-refresh">Refresh members</button>
+      </div>
+      <table class="members" id="acc-members" hidden>
+        <thead><tr><th style="width:56px">Allow</th><th>Member</th><th>Number</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="actions">
+        <button id="btn-acc-all">Approve all current members</button>
+        <button id="btn-acc-none">Approve nobody</button>
+        <button id="btn-acc-team" class="primary">Save team</button>
+        <span id="acc-count" class="muted"></span>
+      </div>
+      <p class="muted" style="margin:6px 0 0">
+        Add the bot's number to the group, then members write <code>@bot your request</code>.
+        The bot answers in the group, quoting the request, so everybody sees the progress.
+        Note that WhatsApp delivers <i>every</i> group message to the bot's account; only mentions from approved members are acted on.
+      </p>
+    </div>
+
+    <div id="acc-msg"></div>
+    <div id="acc-summary" class="muted"></div>
+  </section>
 
   <section class="card">
     <h2>WhatsApp recovery</h2>
@@ -295,6 +356,122 @@ document.querySelectorAll('.tabs button').forEach((b) => {
   };
 });
 
+// --- Access control ---
+let accCfg = null, accBot = '', accMembers = [], accGroups = [];
+const amsg = (t, k) => { const m = $('acc-msg'); m.textContent = t; m.className = k || ''; };
+const accMode = () => (document.querySelector('input[name="acc-mode"]:checked') || {}).value;
+
+function showAccessSection() {
+  const m = accMode();
+  $('acc-personal').hidden = m !== 'personal';
+  $('acc-team').hidden = m !== 'team';
+}
+
+function renderSummary(v) {
+  const c = v.config || {};
+  const where = v.source === 'file' ? 'saved here' : 'from ALLOWED_SENDERS in .env (nothing saved here yet)';
+  let text;
+  if (v.error) text = 'The access file is broken — the bot ignores everyone until you save a valid policy. ' + v.error;
+  else if (c.mode === 'team') text = 'In force now: team mode, ' + ((c.team && c.team.members) || []).length + ' approved member(s), group ' + ((c.team && (c.team.name || c.team.group)) || '—') + ' (' + where + ').';
+  else if (c.mode === 'personal') text = 'In force now: personal mode, ' + (c.personal && c.personal.number ? '+' + c.personal.number : 'no number set') + ' (' + where + ').';
+  else text = 'No policy in force — the bot ignores everyone.';
+  $('acc-summary').textContent = text;
+  $('acc-summary').style.color = v.error ? 'var(--bad)' : '';
+}
+
+function renderGroups() {
+  const sel = $('acc-group'); const saved = accCfg && accCfg.team && accCfg.team.group;
+  const opts = accGroups.slice();
+  if (saved && !opts.some((g) => g.jid === saved)) opts.unshift({ jid: saved, name: (accCfg.team.name || saved) });
+  sel.replaceChildren(...[{ jid: '', name: opts.length ? 'Choose a group…' : 'Press “Load groups”' }, ...opts].map((g) => {
+    const o = document.createElement('option'); o.value = g.jid; o.textContent = g.name || g.jid; return o;
+  }));
+  if (saved) sel.value = saved;
+}
+
+function renderMembers() {
+  const tbody = document.querySelector('#acc-members tbody');
+  $('acc-members').hidden = !accMembers.length;
+  tbody.replaceChildren(...accMembers.map((m) => {
+    const tr = document.createElement('tr');
+    const c1 = document.createElement('td'); const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = !!m.allowed; cb.disabled = m.isBot || !m.approvable;
+    cb.onchange = () => { m.allowed = cb.checked; renderCount(); };
+    c1.append(cb);
+    const c2 = document.createElement('td'); c2.textContent = m.name || '(no name)';
+    for (const [flag, label] of [[m.isAdmin, 'admin'], [m.isBot, 'the bot'], [!m.approvable && !m.isBot, 'no phone number known']]) {
+      if (flag) { const b = document.createElement('span'); b.className = 'badge'; b.textContent = label; c2.append(b); }
+    }
+    const c3 = document.createElement('td'); c3.className = 'num'; c3.textContent = m.phone ? '+' + m.phone : '—';
+    tr.append(c1, c2, c3); return tr;
+  }));
+  renderCount();
+}
+function renderCount() {
+  const n = accMembers.filter((m) => m.allowed).length;
+  $('acc-count').textContent = accMembers.length ? n + ' of ' + accMembers.filter((m) => m.approvable && !m.isBot).length + ' allowed' : '';
+}
+
+async function loadMembers() {
+  const group = $('acc-group').value;
+  accMembers = []; renderMembers();
+  if (!group) return;
+  try {
+    const r = await api('/api/access/members?group=' + encodeURIComponent(group));
+    accMembers = r.members || []; renderMembers();
+  } catch (e) { amsg(e.message, 'err'); }
+}
+
+async function loadAccess() {
+  try {
+    const v = await api('/api/access');
+    accCfg = v.config; accBot = v.botPhone || '';
+    const mode = accCfg.mode === 'team' ? 'team' : 'personal';
+    document.querySelector('input[name="acc-mode"][value="' + mode + '"]').checked = true;
+    $('acc-number').value = (accCfg.personal && accCfg.personal.number) || '';
+    showAccessSection(); renderSummary(v); renderGroups();
+    if (mode === 'team' && accCfg.team && accCfg.team.group) loadMembers();
+  } catch (e) { amsg(e.message, 'err'); }
+}
+
+async function saveAccess(btn, body, done) {
+  btn.disabled = true; amsg('');
+  try {
+    const v = await post('/api/access', body);
+    accCfg = v.config; renderSummary(v); amsg(done, 'okmsg');
+  } catch (e) { amsg(e.message, 'err'); }
+  finally { btn.disabled = false; }
+}
+
+document.querySelectorAll('input[name="acc-mode"]').forEach((r) => { r.onchange = () => { showAccessSection(); amsg(''); }; });
+$('btn-acc-personal').onclick = (e) => saveAccess(e.target,
+  { mode: 'personal', personalNumber: $('acc-number').value },
+  'Saved. Only that number can instruct the bot; groups are ignored. Applies from the next message — no restart.');
+$('btn-acc-groups').onclick = async (e) => {
+  e.target.disabled = true; amsg('');
+  try { accGroups = await api('/api/access/groups'); renderGroups(); amsg(accGroups.length + ' group(s) found. Choose one.', 'okmsg'); }
+  catch (err) { amsg(err.message, 'err'); } finally { e.target.disabled = false; }
+};
+$('acc-group').onchange = loadMembers;
+$('btn-acc-refresh').onclick = loadMembers;
+$('btn-acc-all').onclick = () => {
+  const n = accMembers.filter((m) => m.approvable && !m.isBot).length;
+  if (!n || !confirm('Approve all ' + n + ' current members? Each of them will be able to make Claude run commands on this machine.')) return;
+  accMembers.forEach((m) => { if (m.approvable && !m.isBot) m.allowed = true; }); renderMembers();
+};
+$('btn-acc-none').onclick = () => { accMembers.forEach((m) => { m.allowed = false; }); renderMembers(); };
+$('btn-acc-team').onclick = (e) => {
+  const group = $('acc-group').value;
+  if (!group) { amsg('Choose a group first.', 'err'); return; }
+  const chosen = accMembers.filter((m) => m.allowed && m.approvable && !m.isBot);
+  if (!chosen.length && !confirm('Nobody is approved — the bot will ignore everyone in this group. Save anyway?')) return;
+  const opt = $('acc-group').selectedOptions[0];
+  saveAccess(e.target, {
+    mode: 'team',
+    team: { group, name: opt ? opt.textContent : '', members: chosen.map((m) => ({ phone: m.phone, lid: m.lid, name: m.name })) },
+  }, 'Saved. ' + chosen.length + ' member(s) approved; DMs and other groups are ignored. Applies from the next message — no restart.');
+};
+
 // --- Claude sign-in ---
 let claudePoll = null;
 const cmsg = (t, k) => { const m = $('claude-msg'); m.textContent = t; m.className = k || ''; };
@@ -342,7 +519,7 @@ $('btn-claude-cancel').onclick = async () => {
 };
 api('/api/claude/login').then((l) => { if (l.state === 'waiting_code' || l.state === 'verifying') { renderLogin(l); watchClaudeLogin(); } }).catch(() => {});
 
-refresh(); loadLogs();
+refresh(); loadLogs(); loadAccess();
 setInterval(refresh, 10000);
 setInterval(loadLogs, 30000);
 </script>

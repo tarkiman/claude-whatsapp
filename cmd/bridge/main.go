@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/tarkiman/claude-whatsapp/internal/access"
 	"github.com/tarkiman/claude-whatsapp/internal/claude"
 	"github.com/tarkiman/claude-whatsapp/internal/config"
 	"github.com/tarkiman/claude-whatsapp/internal/gowa"
@@ -35,9 +36,11 @@ func main() {
 		log.Fatalf("pending store: %v", err)
 	}
 
+	accessStore := newAccessStore(cfg)
+
 	gowaClient := gowa.New(cfg.GowaBaseURL, cfg.GowaUser, cfg.GowaPass)
 	runner := claude.New(cfg.ClaudeBin, cfg.WorkDir)
-	handler := webhook.New(cfg, gowaClient, runner, store, pendingStore, newTranscriber(cfg))
+	handler := webhook.New(cfg, gowaClient, runner, store, pendingStore, newTranscriber(cfg), accessStore)
 
 	replayPending(handler, pendingStore)
 
@@ -50,6 +53,31 @@ func main() {
 
 	log.Printf("claude-whatsapp bridge listening on %s (gowa=%s, workdir=%s)", cfg.ListenAddr, cfg.GowaBaseURL, cfg.WorkDir)
 	log.Fatal(http.ListenAndServe(cfg.ListenAddr, mux))
+}
+
+// newAccessStore builds the access policy: the access file written by the
+// Admin UI when it exists, otherwise personal mode for the number in
+// ALLOWED_SENDERS. It logs what is in force, and warns about settings from
+// older versions that no longer grant anything.
+func newAccessStore(cfg *config.Config) *access.Store {
+	legacy, ignored := access.Legacy(cfg.AllowedSenders)
+	if len(ignored) > 0 {
+		log.Printf("access: personal mode allows exactly one number — ignoring extra/invalid ALLOWED_SENDERS entries: %v", ignored)
+	}
+	if len(cfg.AllowedGroups) > 0 {
+		log.Printf("access: ALLOWED_GROUPS is deprecated and admits nobody any more — set up team mode (group + approved members) in the Admin UI")
+	}
+	st := access.Open(cfg.AccessFile, legacy)
+	pol := st.Get()
+	switch {
+	case st.Err() != nil:
+		log.Printf("access: %v — denying everyone until it is fixed", st.Err())
+	case pol.Mode == access.ModeTeam:
+		log.Printf("access: team mode (source=%s) group=%s, %d approved member(s)", st.Source(), pol.Team.Group, len(pol.Team.Members))
+	default:
+		log.Printf("access: personal mode (source=%s), groups ignored", st.Source())
+	}
+	return st
 }
 
 // newTranscriber wires up voice-note transcription if both the whisper-cli

@@ -201,3 +201,61 @@ func (c *Client) Fetch(path string) ([]byte, string, error) {
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
 	return data, resp.Header.Get("Content-Type"), err
 }
+
+// Group is a WhatsApp group the bot account belongs to.
+type Group struct {
+	JID  string `json:"jid"`
+	Name string `json:"name"`
+}
+
+// Groups lists the groups the bot account is in.
+func (c *Client) Groups() ([]Group, error) {
+	res, err := c.call(http.MethodGet, "/user/my/groups", nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Data []struct {
+			JID  string `json:"JID"`
+			Name string `json:"Name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(res, &out); err != nil {
+		return nil, fmt.Errorf("parse groups: %w", err)
+	}
+	groups := make([]Group, 0, len(out.Data))
+	for _, g := range out.Data {
+		groups = append(groups, Group{JID: g.JID, Name: g.Name})
+	}
+	return groups, nil
+}
+
+// Participant is one member of a group. PhoneNumber is digits only and may be
+// empty when gowa knows a member only by their LID.
+type Participant struct {
+	JID         string `json:"jid"`
+	PhoneNumber string `json:"phone_number"`
+	LID         string `json:"lid"`
+	DisplayName string `json:"display_name"`
+	IsAdmin     bool   `json:"is_admin"`
+}
+
+type GroupInfo struct {
+	GroupID      string        `json:"group_id"`
+	Name         string        `json:"name"`
+	Participants []Participant `json:"participants"`
+}
+
+func (c *Client) GroupParticipants(groupID string) (*GroupInfo, error) {
+	q := url.Values{}
+	q.Set("group_id", groupID)
+	res, err := c.call(http.MethodGet, "/group/participants", q, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out GroupInfo
+	if err := json.Unmarshal(res, &out); err != nil {
+		return nil, fmt.Errorf("parse participants: %w", err)
+	}
+	return &out, nil
+}

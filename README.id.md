@@ -6,7 +6,7 @@ Chat dengan [Claude Code](https://claude.com/claude-code) lewat WhatsApp. Pesan 
 
 ![Dashboard admin](docs/images/dashboard.png)
 
-**Isi:** [Cara kerja](#cara-kerja) · [Baca ini dulu](#baca-ini-dulu-keamanan) · [Mulai cepat](#mulai-cepat) · [Admin UI](#admin-ui) · [Konfigurasi](#konfigurasi) · [Upgrade & uninstall](#upgrade--uninstall) · [Instalasi manual](#instalasi-manual-dari-source) · [Troubleshooting](#troubleshooting) · [Fitur](#fitur)
+**Isi:** [Cara kerja](#cara-kerja) · [Baca ini dulu](#baca-ini-dulu-keamanan) · [Mulai cepat](#mulai-cepat) · [Siapa yang boleh memerintah bot](#siapa-yang-boleh-memerintah-bot) · [Admin UI](#admin-ui) · [Konfigurasi](#konfigurasi) · [Upgrade & uninstall](#upgrade--uninstall) · [Instalasi manual](#instalasi-manual-dari-source) · [Troubleshooting](#troubleshooting) · [Fitur](#fitur)
 
 ## Cara kerja
 
@@ -33,8 +33,8 @@ Ada dua nomor WhatsApp yang berperan:
 
 ## Baca ini dulu (keamanan)
 
-- **Ini bukan sandbox.** `claude -p` dijalankan sebagai user Linux yang memasang bridge, dengan `--permission-mode auto`. Siapa pun di `ALLOWED_SENDERS` (atau anggota grup di `ALLOWED_GROUPS`) pada dasarnya bisa membuat Claude membaca file dan menjalankan perintah di mesin itu — termasuk `sudo` kalau user tersebut punya `sudo` tanpa password. Daftarkan hanya nomor yang Anda percaya penuh, dan pertimbangkan memasangnya di user terpisah/VM tanpa hak istimewa. Rincian di [`docs/ARCHITECTURE.id.md` §11](docs/ARCHITECTURE.id.md#11-keamanan).
-- **Allowlist adalah satu-satunya gerbang — lindungi nomor yang ada di dalamnya.** Pesan dari nomor yang tidak ada di `ALLOWED_SENDERS` diabaikan sebelum apa pun dijalankan (pencocokannya persis, lihat [`docs/ARCHITECTURE.id.md` §10](docs/ARCHITECTURE.id.md#10-access-control-per-grup)). Tapi siapa pun yang menguasai akun WhatsApp yang diizinkan menguasai mesin ini, jadi aktifkan verifikasi dua langkah WhatsApp untuknya. Konten yang diteruskan pengirim yang sah (pesan, dokumen) juga bisa berisi instruksi yang ditujukan ke Claude — perlakukan konten teruskan seperti sesuatu yang akan Anda jalankan sendiri. Grup nonaktif kecuali didaftarkan di `ALLOWED_GROUPS`, dan setelah itu semua anggotanya dihitung.
+- **Ini bukan sandbox.** `claude -p` dijalankan sebagai user Linux yang memasang bridge, dengan `--permission-mode auto`. Siapa pun yang boleh memerintah bot (satu nomor di mode personal, setiap anggota yang disetujui di mode tim) pada dasarnya bisa membuat Claude membaca file dan menjalankan perintah di mesin itu — termasuk `sudo` kalau user tersebut punya `sudo` tanpa password. Izinkan hanya orang yang Anda percaya penuh, dan pertimbangkan memasangnya di user terpisah/VM tanpa hak istimewa. Rincian di [`docs/ARCHITECTURE.id.md` §11](docs/ARCHITECTURE.id.md#11-keamanan).
+- **Kebijakan akses adalah satu-satunya gerbang — lindungi akun yang ada di dalamnya.** Apa pun dari nomor yang tidak diizinkan diabaikan sebelum ada yang dijalankan (pencocokannya persis, lihat [`docs/ARCHITECTURE.id.md` §10](docs/ARCHITECTURE.id.md#10-access-control-mode-personal-dan-tim)), dan file kebijakan yang rusak membuat semua orang ditolak. Tapi siapa pun yang menguasai akun WhatsApp yang diizinkan menguasai mesin ini, jadi aktifkan verifikasi dua langkah WhatsApp untuknya. Konten yang diteruskan orang yang diizinkan (pesan, dokumen) juga bisa berisi instruksi yang ditujukan ke Claude — perlakukan konten teruskan seperti sesuatu yang akan Anda jalankan sendiri.
 - **Klien WhatsApp tidak resmi.** gowa/whatsmeow bukan produk resmi WhatsApp; penggunaannya bisa bertentangan dengan ketentuan layanan dan berisiko membuat akun dibatasi. Pakai dengan risiko sendiri — sebaiknya dengan nomor khusus.
 - **Rahasiakan `.env` dan `data/`.** `.env` berisi secret webhook dan password gowa; `data/whatsapp/` adalah sesi WhatsApp yang aktif (akses penuh ke akun bot). Keduanya ada di `.gitignore` — jangan pernah di-commit atau dibagikan.
 - **Admin UI hanya untuk Anda.** Halaman admin bisa menautkan ulang WhatsApp dan mengganti login Claude. Default-nya cuma bisa dibuka dari mesin itu sendiri; jangan diekspos ke internet. Lihat [Admin UI](#admin-ui).
@@ -96,6 +96,38 @@ Login ini dipakai bersama oleh **semua** sesi Claude Code di user Linux itu, buk
 
 Dari nomor pengirim, kirim pesan WhatsApp apa saja ke nomor bot. Status keseluruhan harus **All good** di Admin UI. Kalau tidak ada balasan, lihat [Troubleshooting](#troubleshooting).
 
+Setelah instalasi bot ada di **mode personal**: hanya nomor pengirim Anda yang bisa memerintahnya, dan grup diabaikan. Supaya sebuah tim bisa memakainya di grup WhatsApp, lihat [Siapa yang boleh memerintah bot](#siapa-yang-boleh-memerintah-bot).
+
+## Siapa yang boleh memerintah bot
+
+Instruksi menjadi perintah di mesin Anda, jadi bot hanya punya dua mode, keduanya diatur dari kartu **Who can instruct the bot** di [Admin UI](#admin-ui). Perubahan berlaku mulai pesan berikutnya — tanpa restart.
+
+| | **Personal** (default) | **Tim** |
+|---|---|---|
+| Siapa | tepat satu nomor telepon | anggota satu grup WhatsApp yang Anda setujui |
+| Di mana | hanya pesan langsung; grup diabaikan | hanya grup itu; DM diabaikan |
+| Pemicu | pesan apa pun | hanya pesan yang **@mention bot** |
+| Orang baru | — | ditolak sampai Anda mencentangnya |
+
+![Mode tim di Admin UI](docs/images/access-team.png)
+
+**Mode personal** adalah yang Anda dapat setelah instalasi, memakai nomor yang Anda berikan ke installer. Untuk menggantinya, ketik nomor lain di kartu itu lalu simpan — selalu hanya ada satu.
+
+**Mode tim** — tujuannya agen bersama yang bisa dilihat kerjanya oleh seluruh tim:
+
+1. Buat grup WhatsApp dan tambahkan **nomor bot** ke dalamnya, beserta rekan tim Anda.
+2. Di Admin UI pilih **Team**, tekan **Load groups**, pilih grupnya. Anggota grup saat ini muncul dengan satu kotak centang masing-masing.
+3. Centang orang yang boleh memerintah bot (atau **Approve all current members**) lalu tekan **Save team**.
+4. Anggota yang disetujui menulis `@bot <permintaan>` di grup. Bot menjawab **di grup, mengutip permintaannya**, sehingga semua orang melihat progresnya. Semua berbagi satu sesi Claude per grup, dan bot tahu siapa yang sedang bicara.
+
+Hal yang perlu diketahui:
+
+- **Persetujuan bersifat eksplisit.** Orang yang ditambahkan ke grup WhatsApp belakangan *tidak* diizinkan sampai Anda mencentangnya di kartu; roster kosong berarti tidak ada yang diizinkan. Pesan yang tidak me-mention bot adalah obrolan biasa dan diabaikan, siapa pun penulisnya.
+- **Setiap anggota yang disetujui pada dasarnya administrator mesin ini** (lihat [keamanan](#baca-ini-dulu-keamanan)). Untuk tim, jalankan bridge sebagai user khusus tanpa hak istimewa atau di VM, arahkan `WORK_DIR` ke folder proyek alih-alih `$HOME`, dan hindari `sudo` tanpa password.
+- **Privasi.** WhatsApp mengirim setiap pesan grup ke akun bot, dan gowa menyimpan salinan semuanya (termasuk obrolan yang tidak pernah me-mention bot) di `data/whatsapp/chatstorage.db`. Beri tahu tim Anda bahwa akun bot bisa melihat seluruh grup.
+- **Mention harus berupa @mention sungguhan** (pilih bot dari saran saat mengetik `@`). Deteksi dilakukan pada teks pesan, dengan menerima nomor telepon bot atau LID WhatsApp-nya. Kalau tidak bereaksi, set `LOG_GROUP_MESSAGES=1` di `.env`, restart, mention bot sekali lalu baca `journalctl --user -u claude-whatsapp.service` — baris `group-message:` menunjukkan persis apa yang datang dan kenapa diterima atau diabaikan (ini mencatat teks pesan, jadi matikan lagi).
+- Orang yang oleh WhatsApp hanya dikenal lewat ID internal (tanpa nomor telepon yang terlihat) tidak bisa disetujui; kartu menandainya.
+
 ## Admin UI
 
 Halaman status dan pemulihan di `http://127.0.0.1:8098`, berjalan sebagai service terpisah (`claude-whatsapp-admin`) supaya tetap bisa dibuka justru saat bridge yang bermasalah.
@@ -119,10 +151,10 @@ Atau buka langsung dari LAN/[ZeroTier](https://www.zerotier.com/) dengan mengisi
 ```bash
 ADMIN_ADDR=127.0.0.1:8098,192.168.1.20:8098,10.147.20.15:8098   # IP spesifik mesin ini; 0.0.0.0 ditolak
 ADMIN_ALLOWED_NETS=192.168.1.0/24,10.147.0.0/16                  # hanya klien dari jaringan ini yang dilayani
-ADMIN_PASSWORD=<acak-dan-panjang>                                # opsional tapi sangat disarankan
+ADMIN_PASSWORD=<acak-dan-panjang>                                # WAJIB begitu halaman mendengarkan di luar loopback
 ```
 
-Klien di luar `ADMIN_ALLOWED_NETS` langsung ditolak (403), dan IP yang belum ada saat boot (mis. interface ZeroTier) dicoba ulang tiap 5 detik. Ini HTTP biasa: pembatasan jaringan saja tidak melindungi dari sesama pengguna jaringan yang sama, jadi isi `ADMIN_PASSWORD` kalau jaringannya tidak sepenuhnya Anda percaya, dan jangan buka ke internet publik.
+Klien di luar `ADMIN_ALLOWED_NETS` langsung ditolak (403), dan IP yang belum ada saat boot (mis. interface ZeroTier) dicoba ulang tiap 5 detik. Ini HTTP biasa, dan halaman ini menentukan siapa yang boleh membuat Claude menjalankan perintah di mesin — jadi `ADMIN_PASSWORD` **wajib** begitu halaman mendengarkan di luar loopback (admin menolak start tanpanya). Jangan pernah membukanya ke internet publik.
 
 ## Konfigurasi
 
@@ -130,8 +162,10 @@ Semua lewat `.env` di direktori instalasi (`chmod 600`; template lengkap dengan 
 
 | Variabel | Fungsi |
 |---|---|
-| `ALLOWED_SENDERS` | **Wajib.** Nomor pengirim yang boleh memberi perintah (JID `6281…@s.whatsapp.net`, pisah koma). Bridge menolak start kalau kosong. |
-| `ALLOWED_GROUPS` | Opsional. JID grup (`…@g.us`) yang boleh memakai bot; kosong = DM saja. Sekali grup didaftarkan, **semua** anggotanya bisa memicu bot. |
+| `ALLOWED_SENDERS` | **Wajib.** Nomor telepon Anda — titik awal mode personal (tepat satu nomor; entri tambahan diabaikan). Begitu Anda menyimpan kebijakan di Admin UI, ia tersimpan di `access.json` dan nilai ini tidak dipakai lagi. |
+| `ACCESS_FILE` | Tempat kebijakan akses disimpan (default `~/.claude-whatsapp/access.json`). File rusak membuat bridge menolak semua orang. |
+| `LOG_GROUP_MESSAGES` | `1` mencatat teks pesan grup, pengirim, dan keputusannya — untuk mendiagnosis deteksi @mention. Mati secara default. |
+| `ALLOWED_GROUPS` | **Deprecated** — tidak mengizinkan siapa pun lagi. Pakai mode tim di Admin UI. |
 | `WEBHOOK_SECRET` | Kunci HMAC antara gowa dan bridge — dibuat acak oleh installer. |
 | `GOWA_BASIC_AUTH_USER/PASSWORD` | Kredensial REST API gowa — password dibuat acak oleh installer. |
 | `WORK_DIR` | Direktori kerja `claude -p` (default `$HOME`; di sinilah `CLAUDE.md` Anda terbaca). |
@@ -214,6 +248,7 @@ Mulai dari [Admin UI](#admin-ui): status, alasan, dan log biasanya sudah menunju
 
 | Gejala | Kemungkinan penyebab | Cek |
 |---|---|---|
+| Bot tidak menanggapi @mention saya di grup | Bukan mode tim, pengirim belum dicentang di roster, grupnya bukan yang dipilih, atau teksnya bukan @mention sungguhan ke bot | Admin UI → *Who can instruct the bot*; set `LOG_GROUP_MESSAGES=1` dan baca baris log `group-message:` |
 | Bot diam total, padahal service `active` | Sesi WhatsApp terhapus/di-unlink (Admin UI: `Down` + "logged out"), atau gowa sempat putus koneksi | Admin UI → **Reconnect**, atau pairing ulang. `docker logs claude-whatsapp-gowa` |
 | Tidak ada balasan sama sekali | `claude` tidak ketemu di `$PATH` milik service systemd, atau belum login | `journalctl --user -u claude-whatsapp.service -n 50` — cari `executable file not found`; cek kartu **Claude account** |
 | Balasan generik "ada error di sisi saya" | `claude -p` gagal/timeout, atau endpoint gowa lain gagal | Log yang sama — pesan errornya spesifik |
@@ -231,10 +266,10 @@ Mulai dari [Admin UI](#admin-ui): status, alasan, dan log biasanya sudah menunju
 - **Voice note** — ditranskrip otomatis secara lokal (`whisper.cpp`, multilingual, tanpa API cloud) sebelum dikirim ke `claude -p`. Opsional. Di Raspberry Pi 5 (4 thread CPU), model `base` ~2.3x lebih cepat dari real-time.
 - **Durability** — pesan ditulis ke antrian on-disk (`~/.claude-whatsapp/pending/`) sebelum di-ack ke gowa, dan direplay otomatis kalau bridge sempat mati di tengah proses.
 - **Satu `claude -p` per chat pada satu waktu** — dikunci per `chat_id`; pesan lain untuk chat yang sama antre, bukan berebut sesi `--resume` yang sama.
-- **Access control per grup** — `ALLOWED_GROUPS` terpisah dari `ALLOWED_SENDERS`. Sekali grup didaftarkan, semua anggotanya bisa memicu bot (gowa tidak memberi data @-mention di webhook, lihat [`docs/ARCHITECTURE.id.md` §10](docs/ARCHITECTURE.id.md#10-access-control-per-grup)).
+- **Mode personal dan tim** — satu nomor di DM, atau satu grup dengan roster yang disetujui dan @mention wajib; diatur dari Admin UI dan berlaku tanpa restart ([di atas](#siapa-yang-boleh-memerintah-bot)).
 - **Admin UI** — status, pemulihan WhatsApp, dan login Claude ([di atas](#admin-ui)).
 
-**Belum diimplementasikan:** mention-gating di grup (keterbatasan data dari gowa), approval tool-call lewat reaction emoji, dan rate limiting lintas-chat (tiap chat berbeda = proses `claude -p` sendiri, tanpa batas jumlah paralel). Kontribusi/PR dipersilakan.
+**Belum diimplementasikan:** approval tool-call lewat reaction emoji, dan rate limiting lintas-chat (tiap chat berbeda = proses `claude -p` sendiri, tanpa batas jumlah paralel). Kontribusi/PR dipersilakan.
 
 ## Struktur repo
 

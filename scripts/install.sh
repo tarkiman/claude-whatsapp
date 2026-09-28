@@ -13,8 +13,9 @@
 #                      [--non-interactive] [--skip-start]
 #
 #   --allowed-senders  your phone number (the sender) with country code, e.g.
-#                      6281234567890 or 6281234567890@s.whatsapp.net.
-#                      Asked interactively if not given.
+#                      6281234567890 or 6281234567890@s.whatsapp.net. It becomes
+#                      the one number of personal mode. Asked interactively if
+#                      not given.
 #   --gowa-port        gowa's port on the host (default 3011)
 #   --non-interactive  never prompt; fail if a required value is missing
 #   --skip-start       only prepare .env — don't start Docker/the services
@@ -198,5 +199,7 @@ cat <<EOF
      (if "not signed in", click Sign in on that card)
 
   Then send a WhatsApp message to the newly linked number from the sender number above.
+  The bot starts in PERSONAL mode: only that one number can instruct it, groups are ignored.
+  To let a team use it in a WhatsApp group, open the "Who can instruct the bot" card.
   Status and logs are on the same admin page at any time.
 EOF
