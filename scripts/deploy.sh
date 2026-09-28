@@ -20,6 +20,33 @@ if ! command -v claude >/dev/null 2>&1; then
 	echo "The bridge will fail to run Claude until it is installed and on PATH." >&2
 fi
 
+# v0.2.0 made ADMIN_PASSWORD mandatory whenever the admin UI listens beyond
+# loopback (that page decides who may run commands on this machine). Without
+# this, upgrading an install that serves the admin on LAN/ZeroTier would leave
+# the admin refusing to start — so create the password instead.
+admin_beyond_loopback() {
+	local entries entry host
+	IFS=',' read -ra entries <<<"$(grep -E '^ADMIN_ADDR=' .env | tail -1 | cut -d= -f2-)"
+	for entry in ${entries[@]+"${entries[@]}"}; do
+		entry="${entry//[[:space:]]/}"
+		[ -n "$entry" ] || continue
+		host="${entry%:*}"
+		host="${host#[}"
+		host="${host%]}"
+		case "$host" in
+		127.0.0.1 | localhost | ::1) ;;
+		*) return 0 ;;
+		esac
+	done
+	return 1
+}
+if admin_beyond_loopback && ! grep -qE '^ADMIN_PASSWORD=.+' .env; then
+	pw="$(openssl rand -hex 16 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+	printf '\n# Required whenever the admin UI listens beyond loopback (added by scripts/deploy.sh).\nADMIN_PASSWORD=%s\n' "$pw" >>.env
+	echo "NOTE: ADMIN_ADDR listens beyond loopback, so ADMIN_PASSWORD is now required."
+	echo "      Generated one and added it to .env (user: admin). Read it with: grep ADMIN_PASSWORD .env"
+fi
+
 if [ -d cmd/bridge ] && [ -d cmd/admin ] && command -v go >/dev/null 2>&1; then
 	echo "Building bridge and admin..."
 	mkdir -p bin
@@ -55,5 +82,6 @@ systemctl --user restart claude-whatsapp.service claude-whatsapp-admin.service
 loginctl enable-linger "$(whoami)"
 
 echo "Done. Check status with: systemctl --user status claude-whatsapp.service"
-echo "Admin UI (loopback only): http://127.0.0.1:8098 — from another machine use"
+echo "Admin UI: http://127.0.0.1:8098 (this machine only by default). From another machine use"
 echo "  ssh -L 8098:127.0.0.1:8098 <this-host>   then open http://localhost:8098"
+echo "  or serve it on LAN/ZeroTier with ADMIN_ADDR + ADMIN_ALLOWED_NETS + ADMIN_PASSWORD (see .env.example)."

@@ -20,6 +20,8 @@ Dibangun 2026-08-28, dan dikembangkan serta dipakai sehari-hari di Raspberry Pi 
 | **claude CLI** | `@anthropic-ai/claude-code` (npm) | Otak sesungguhnya — satu subprocess call per pesan, mode print (`-p`), di-*resume* per `chat_id`. |
 | **sessions.json** | File JSON lokal | Peta `chat_id → claude session_id`, supaya panggilan `claude -p` berikutnya untuk chat yang sama pakai `--resume`. |
 | **pending/*.json** | File JSON lokal | Antrian durable — satu file per pesan yang sudah di-ack ke gowa tapi belum selesai dibalas. Lihat [§8](#8-durability-pesan). |
+| **admin UI** | Go (repo ini), proses terpisah | Status, pemulihan WhatsApp, login Claude, dan editor kebijakan akses. Unit systemd sendiri, jadi tetap bisa dibuka saat bridge mati. Lihat [§16](#16-admin-ui--installer). |
+| **access.json** | File JSON lokal | Kebijakan akses — mode personal atau tim, satu nomor / grup beserta anggota yang disetujui. Ditulis admin UI, dibaca ulang bridge saat berubah. Lihat [§10](#10-access-control-mode-personal-dan-tim). |
 
 ```mermaid
 flowchart LR
@@ -41,6 +43,11 @@ flowchart LR
     Bridge <--> Store
     Bridge <--> Pending
     Claude <--> FS
+    Admin["🛠 admin UI\nGo · systemd · :8098\nclaude-whatsapp-admin.service"]
+    Access[("access.json\nsiapa yang boleh memerintah bot")]
+    Admin -->|"simpan kebijakan"| Access
+    Bridge -->|"baca saat berubah"| Access
+    Admin -->|"status · pairing\ndaftar anggota"| Gowa
 
     style Gowa fill:#25D366,color:#000
     style Bridge fill:#00ADD8,color:#000
@@ -162,6 +169,8 @@ Setiap `chat_id` WhatsApp punya satu "utas" percakapan Claude Code yang terus di
 
 Ini artinya bridge sendiri **stateless** soal isi percakapan — semua "ingatan" ada di sesi Claude Code (dikelola `claude` CLI sendiri) dan di memory per-repo (`~/.claude/projects/*/memory/`, lihat `~/CLAUDE.md`). Kalau proses `bridge` di-restart, tidak ada percakapan yang hilang — `sessions.json` tetap ada, tinggal lanjut resume.
 
+Di mode tim `chat_id` adalah grupnya, jadi seluruh tim berbagi satu utas — itulah yang membuat semua orang melihat progres yang sama ([§10](#10-access-control-mode-personal-dan-tim)).
+
 **Penting**: `claude -p --resume <id>` tidak dirancang untuk diakses beberapa proses sekaligus pada `session_id` yang sama — lihat [§9](#9-kunci-per-chat-concurrency) untuk kenapa ini penting dan bagaimana bridge menjamin cuma satu proses aktif per chat.
 
 ## 7. Lampiran media
@@ -205,7 +214,7 @@ Masalah yang diperbaiki: webhook handler harus ack gowa dalam <10 detik, jadi pe
 
 **Solusi** (`internal/pending`): setiap pesan yang lolos filter ditulis ke `~/.claude-whatsapp/pending/<message_id>.json` (nama file dari `message_id`, jadi idempotent kalau ada redelivery) **sebelum** di-ack, dan baru dihapus (`Done()`) setelah balasan — sukses ataupun pesan fallback error — benar-benar terkirim. Kalau `SendMessage` sendiri gagal (bukan error dari Claude, tapi gagal ngirim balasannya), file pending-nya sengaja **tidak** dihapus, supaya restart berikutnya coba lagi.
 
-Saat startup, `main.go` memanggil `pending.Store.ListAll()` dan me-*replay* setiap file yang tersisa lewat `webhook.Handler.Replay()` — persis alur normal, cuma masuknya dari `main.go` bukan `ServeHTTP`. Lihat diagram [§4](#4-startup--replay-pesan-pending).
+Saat startup, `main.go` memanggil `pending.Store.ListAll()` dan me-*replay* setiap file yang tersisa lewat `webhook.Handler.Replay()` — persis alur normal, cuma masuknya dari `main.go` bukan `ServeHTTP`. Lihat diagram [§4](#4-startup--replay-pesan-pending). Replay juga memeriksa ulang kebijakan akses ([§10](#10-access-control-mode-personal-dan-tim)), jadi pesan yang sempat antre sebelum pengirimnya dihapus atau dicabut persetujuannya dibuang, bukan dieksekusi.
 
 **Verified**: diuji dengan menyuntik file pending buatan lalu me-restart service — log menunjukkan `pending: found 1 message(s)... replaying`, pesan berhasil dibalas, file terhapus otomatis.
 
@@ -308,6 +317,8 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 
 - **gowa + sidecar**: Docker Compose, `docker compose up -d` (menjalankan `gowa` dan `gowa-media-perms-fix` sekaligus). Persistence koneksi WhatsApp ada di volume `./data/whatsapp` (sqlite whatsmeow store); lampiran media di `./data/statics`.
 - **bridge**: dibangun jadi binary native (`go build -o bin/bridge ./cmd/bridge`), dipasang sebagai `systemd --user` service (`deploy/claude-whatsapp.service.template`, di-generate `scripts/deploy.sh` dengan path & `$PATH` mesin masing-masing) — `Restart=always`, `RestartSec=5`. Tidak ada TTY/prompt interaktif sama sekali — restart otomatis systemd langsung jalan bersih, tanpa langkah tambahan.
+- **admin UI**: binary kedua (`bin/admin`) dan unit (`claude-whatsapp-admin.service`) yang dipasang oleh `scripts/deploy.sh` yang sama; default hanya loopback, `ADMIN_PASSWORD` wajib di luar loopback ([§16](#16-admin-ui--installer)).
+- **install / upgrade**: `scripts/quick-install.sh` → `scripts/install.sh` → `scripts/deploy.sh`. Menjalankannya lagi = upgrade di tempat dan tidak pernah menyentuh `.env`, `data/`, atau `access.json`. `deploy.sh` juga membuat `ADMIN_PASSWORD` kalau `ADMIN_ADDR` yang sudah ada mendengarkan di luar loopback tanpa password, jadi upgrade dari v0.1.x tidak membuat admin menolak start.
 - Redeploy setelah ubah kode: `scripts/deploy.sh` (idempotent — build ulang, `daemon-reload`, `restart` eksplisit supaya binary baru benar-benar terpakai, bukan cuma `enable --now` yang diam-diam skip restart kalau service sudah jalan). **Ingat**: tiap restart mematikan proses `claude -p` yang sedang jalan — normal untuk deploy sesekali, tapi hindari redeploy berkali-kali beruntun saat ada percakapan aktif (lihat [§9](#9-kunci-per-chat-concurrency) untuk kenapa ini pernah jadi masalah).
 - Cek status: `systemctl --user status claude-whatsapp.service`, `docker logs claude-whatsapp-gowa`, `docker ps` (pastikan `gowa-media-perms-fix` juga `Up`), `journalctl --user -u claude-whatsapp.service -f`.
 
@@ -316,12 +327,17 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 | Endpoint | Method | Dipakai untuk |
 |---|---|---|
 | `/webhook` (di sisi bridge) | POST | Terima event `message` dari gowa |
-| `/send/message` | POST | Kirim balasan teks. Body: `{phone, message}` |
+| `/send/message` | POST | Kirim balasan teks. Body: `{phone, message}` ditambah `reply_message_id` opsional untuk mengutip pesan (dipakai di grup tim) |
 | `/send/chat-presence` | POST | Indikator "mengetik". Body: `{phone, action}` — **`action` cuma terima `"start"`/`"stop"`**, bukan `"composing"`/`"paused"` (gotcha: itu nilai untuk field lain di payload webhook) |
 | `/message/{id}/reaction` | POST | Reaksi emoji (belum dipakai bridge, tersedia di client). Body: `{phone, emoji}` |
 | `/devices` | POST | Buat device slot baru (dipakai sekali saat pairing) |
 | `/app/login-with-code` | GET | Minta kode pairing — perlu `?device_id=` walau endpoint "legacy" |
 | `/app/status` | GET | Cek status login sesungguhnya (`is_logged_in`) — lebih bisa dipercaya dari field `state` di `/devices/{id}` |
+| `/devices` | GET | Daftar device terdaftar (Admin UI). `results` bernilai `null` kalau kosong — berbeda dengan `/app/devices` yang lalu menjawab 400 |
+| `/app/login` | GET | Membuat QR pairing: `results.qr_link` menunjuk PNG di `/statics/qrcode/` (diproksikan admin) |
+| `/app/reconnect`, `/app/logout` | GET | Reconnect / unlink device. Logout pada sesi yang sudah mati tetap menghapus record tetapi lalu mengembalikan error |
+| `/user/my/groups` | GET | Grup tempat bot menjadi anggota (`results.data[].JID` / `.Name`) — untuk pemilih grup mode tim |
+| `/group/participants` | GET | Anggota sebuah grup: `jid`, `phone_number`, `lid`, `display_name`, `is_admin` — mengisi roster tim dan membuat bridge tahu LID bot sendiri |
 
 Detail lengkap format payload webhook: `docs/webhook-payload.md` di [repo gowa](https://github.com/aldinokemal/go-whatsapp-web-multidevice).
 
@@ -334,7 +350,7 @@ Detail lengkap format payload webhook: `docs/webhook-payload.md` di [repo gowa](
 | `GET /api/status` | Gabungan: unit systemd bridge + `/health`, antrian pending, jumlah chat, container Docker, status device gowa (`/app/status`), dan `claude auth status`. Menghasilkan verdict `ok` / `degraded` / `down` beserta alasannya |
 | `GET/POST /api/access`, `GET /api/access/groups`, `GET /api/access/members?group=` | Kartu "Who can instruct the bot": baca/simpan kebijakan akses, daftar grup bot, daftar anggota grup beserta status persetujuannya. Menyimpan memvalidasi lalu menulis `access.json` secara atomik; bridge memakainya pada pesan berikutnya |
 | `GET /api/logs` | `journalctl` bridge atau `docker logs` gowa |
-| `POST /api/wa/qr`, `GET /api/wa/qr.png`, `POST /api/wa/pair-code` | Pairing WhatsApp. Kalau gowa belum punya device, satu device baru dibuat otomatis |
+| `POST /api/wa/qr`, `GET /api/wa/qr.png`, `POST /api/wa/pair-code`, `GET /api/wa/status` | Pairing WhatsApp. Kalau gowa belum punya device, satu device baru dibuat otomatis |
 | `POST /api/wa/reconnect`, `POST /api/wa/logout` | Pemulihan koneksi / unlink (logout wajib membawa `confirm: "LOGOUT"`) |
 | `GET/POST /api/claude/login[/start\|/code\|/cancel]` | Login Claude — lihat di bawah |
 
