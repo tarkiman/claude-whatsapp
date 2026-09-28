@@ -18,20 +18,24 @@ type Config struct {
 	// Must match the --webhook-secret / WHATSAPP_WEBHOOK_SECRET given to gowa.
 	WebhookSecret string
 
-	// JIDs or bare phone numbers allowed to DM this bridge directly. Anyone else is ignored.
+	// ALLOWED_SENDERS seeds the access policy until the Admin UI writes an
+	// access file (see internal/access): the first number becomes the single
+	// personal-mode owner. Required, so a fresh install can never start open.
 	AllowedSenders []string
 
-	// Group JIDs (end in "@g.us") allowed to talk to this bridge. A group
-	// NOT in this list is ignored entirely, even if the individual sender
-	// is in AllowedSenders — being in AllowedSenders only covers DMs.
-	// Access is granted at the group level: once a group is allowlisted,
-	// any member of it can trigger the bridge (matches how most group bots
-	// behave — control is "did I add this bot to a group I trust", not
-	// per-member). If you want tighter control, list fewer/smaller groups
-	// rather than relying on per-member gating, which gowa's webhook
-	// payload doesn't currently give this bridge enough data to enforce
-	// (no mentioned-JIDs field — see docs/ARCHITECTURE.md).
+	// Deprecated: groups are configured as "team mode" in the Admin UI now
+	// (one group, an approved-member roster, @mention required). A non-empty
+	// ALLOWED_GROUPS no longer admits anyone; the bridge only warns about it.
 	AllowedGroups []string
+
+	// Where the access policy (personal/team mode, roster) is stored. Written
+	// by the Admin UI, re-read by the bridge whenever it changes.
+	AccessFile string
+
+	// LOG_GROUP_MESSAGES=1 logs sender, ids and text of group messages (with
+	// the decision taken) to help diagnose @mention detection. Off by default
+	// because it writes message content to the log.
+	LogGroupMessages bool
 
 	// Path to the claude CLI binary.
 	ClaudeBin string
@@ -79,6 +83,8 @@ func FromEnv() (*Config, error) {
 		ClaudeBin:        getEnv("CLAUDE_BIN", "claude"),
 		WorkDir:          getEnv("WORK_DIR", home),
 		SessionStorePath: getEnv("SESSION_STORE_PATH", home+"/.claude-whatsapp/sessions.json"),
+		AccessFile:       getEnv("ACCESS_FILE", home+"/.claude-whatsapp/access.json"),
+		LogGroupMessages: os.Getenv("LOG_GROUP_MESSAGES") == "1",
 		PendingDir:       getEnv("PENDING_DIR", home+"/.claude-whatsapp/pending"),
 		MediaDir:         getEnv("GOWA_MEDIA_DIR", "./data/statics"),
 		WhisperBin:       getEnv("WHISPER_BIN", "./bin/whisper-cli"),
@@ -110,53 +116,6 @@ func splitAllowlist(v string) []string {
 		}
 	}
 	return out
-}
-
-// IsGroupChat reports whether a chat_id refers to a WhatsApp group rather
-// than a 1:1 DM — group JIDs always end in "@g.us".
-func IsGroupChat(chatID string) bool {
-	return strings.HasSuffix(chatID, "@g.us")
-}
-
-// IsAllowed decides whether a message should be processed. Groups and DMs
-// are gated separately: for a group chat_id, only AllowedGroups is
-// consulted (any member of an allowlisted group can trigger the bridge);
-// for anything else, from/chatID is checked against AllowedSenders.
-func (c *Config) IsAllowed(chatID, from string) bool {
-	if IsGroupChat(chatID) {
-		return matchesAllowlist(c.AllowedGroups, chatID)
-	}
-	return matchesAllowlist(c.AllowedSenders, from) || matchesAllowlist(c.AllowedSenders, chatID)
-}
-
-// splitJID splits a WhatsApp JID into its user and server parts, dropping the
-// ":device" suffix multi-device JIDs carry ("6281…:12@s.whatsapp.net" is the
-// same person as "6281…@s.whatsapp.net").
-func splitJID(jid string) (user, server string) {
-	user, server, _ = strings.Cut(jid, "@")
-	user, _, _ = strings.Cut(user, ":")
-	return user, server
-}
-
-// matchesAllowlist requires an EXACT match on the user part and the server
-// part. An entry without "@" is a bare phone number and only matches
-// phone-number JIDs (@s.whatsapp.net) — never a prefix of a longer number,
-// and never an @lid identifier that merely starts with the same digits.
-func matchesAllowlist(list []string, jid string) bool {
-	user, server := splitJID(jid)
-	if user == "" {
-		return false
-	}
-	for _, a := range list {
-		aUser, aServer := splitJID(a)
-		if aServer == "" {
-			aServer = "s.whatsapp.net"
-		}
-		if aUser == user && aServer == server {
-			return true
-		}
-	}
-	return false
 }
 
 func getEnv(key, fallback string) string {

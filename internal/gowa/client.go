@@ -64,10 +64,20 @@ func (c *Client) post(path string, body any) error {
 
 // SendMessage sends a plain text reply to a chat.
 func (c *Client) SendMessage(chatID, text string) error {
-	return c.post("/send/message", map[string]string{
+	return c.SendReply(chatID, text, "")
+}
+
+// SendReply sends text and, when replyToID is set, quotes that message — in a
+// group this shows everyone which request the answer belongs to.
+func (c *Client) SendReply(chatID, text, replyToID string) error {
+	body := map[string]string{
 		"phone":   chatID,
 		"message": text,
-	})
+	}
+	if replyToID != "" {
+		body["reply_message_id"] = replyToID
+	}
+	return c.post("/send/message", body)
 }
 
 // SetChatPresence toggles the "typing…" indicator for a chat.

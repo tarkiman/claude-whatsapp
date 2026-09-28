@@ -64,7 +64,7 @@ sequenceDiagram
     W->>G: Deliver (whatsmeow)
     G->>B: POST /webhook<br/>event=message, HMAC in X-Hub-Signature-256 header
     activate B
-    B->>B: Verify HMAC · filter (is_from_me, allowlist)
+    B->>B: Verify HMAC · filter (is_from_me) · access policy (§10)
     B->>B: buildPrompt() — combine body/caption +<br/>attachment instructions if any (see §7)
     B->>P: Write(message_id, prompt, ...)
     Note over P: Written BEFORE the ack — if the bridge dies<br/>right after the ack, this is the evidence to replay
@@ -127,6 +127,7 @@ claude-whatsapp/
 ├── cmd/admin/main.go           # Admin UI entrypoint — see §16
 ├── internal/
 │   ├── config/config.go        # read .env, validate (ALLOWED_SENDERS & WEBHOOK_SECRET required)
+│   ├── access/access.go        # access policy: personal/team modes, roster, mention detection, access.json store — §10
 │   ├── gowa/client.go          # thin REST client for gowa (SendMessage, SetChatPresence, React)
 │   ├── gowa/admin.go           # device operations for the Admin UI (status, QR, pair code, logout)
 │   ├── admin/                  # Admin UI: handlers, network guard, Claude login, web/index.html — §16
@@ -227,37 +228,52 @@ flowchart TD
 
 Note that `go test -race` does not work on this Pi 5 (`ThreadSanitizer: unsupported VMA range` — an ARM64 kernel limitation, not a code bug); the tests remain valid when run without `-race`.
 
-## 10. Per-group access control
+## 10. Access control (personal and team modes)
 
-`config.IsAllowed(chatID, from)` gates DMs and groups **separately**:
+`internal/access` is the one place that decides whether a webhook may reach Claude (`Config.Decide`). The policy is a small JSON file (`ACCESS_FILE`, default `~/.claude-whatsapp/access.json`, mode `0600`) edited from the Admin UI and re-read by the bridge whenever it changes — no restart. Until that file exists, `ALLOWED_SENDERS` provides a personal-mode policy. If the file exists but cannot be read or validated, **everybody is denied** (fail closed); the environment fallback is never used to paper over a broken file.
 
-- **DM** (`chat_id` ending in `@s.whatsapp.net`): processed if `from` OR `chat_id` is in `ALLOWED_SENDERS` — same as before.
-- **Group** (`chat_id` ending in `@g.us`): processed if `chat_id` is in `ALLOWED_GROUPS` — **`ALLOWED_SENDERS` is irrelevant** for groups. Once a group is allowlisted, **any member of that group** can trigger the bridge, not just the numbers in `ALLOWED_SENDERS`.
+| | Personal (default) | Team |
+|---|---|---|
+| Who | exactly one phone number | members of one group who are on the approved roster |
+| Where | direct messages only; every group is ignored | that one group only; DMs are ignored |
+| Trigger | any message | only messages that @mention the bot |
+| New people | n/a | denied until ticked in the Admin UI |
 
-**Why it is designed this way (not per-member inside a group):** gowa's webhook payload for group messages carries no mentioned-JID data (there is no `payload.mentions` or similar — checked directly against gowa's source, not assumed). Without it, the bridge has no way to tell "the bot was mentioned" from "an ordinary message in the group", so there is no technical basis for mention-gating. Access control therefore sits at the group level: the decision "may this group use the bridge" is in your hands when you fill in `ALLOWED_GROUPS`, not in the bridge's hands at runtime.
+**Personal mode.** One number, compared exactly. Groups are ignored even if the owner writes in one.
 
-**Matching is exact**, on both the user part and the server part of the JID (`config.matchesAllowlist`): the `:device` suffix of a multi-device JID is ignored (the owner's second device is still the owner), a bare number in the list only matches phone-number JIDs (`@s.whatsapp.net`) and is never treated as a prefix of a longer number, and an `@lid` identifier never matches a phone number — it fails closed. The allowlist is enforced again when the pending queue is replayed at startup, so a message queued before its sender was removed from the list is dropped instead of executed.
+**Team mode.** Three conditions must all hold: the message is in the configured group, its sender is on the approved roster, and it @mentions the bot. Messages that don't mention the bot are ordinary conversation between people and are dropped silently. The roster lists *approved* members only — somebody added to the WhatsApp group later is not on it, so mentioning the bot gets them nothing until someone ticks them in the Admin UI (which lists the group's current members via gowa's `GET /group/participants`). An empty roster allows nobody.
 
-**Practical consequence**: if you want it stricter than "every member of group X is allowed", the only way today is to limit which groups are allowlisted (small/trusted groups), not who is inside them.
+**How a mention is detected.** gowa's webhook carries no structured mention data, but it rewrites `@<lid>` tokens in `body` to `@<phone>` whenever it knows the LID→phone mapping. The bridge therefore accepts `@<bot phone>` (the phone number comes from the event's own `device_id`) and, as a fallback, `@<bot LID>`. The bot's LID is looked up once from the group's member list (the bot is a member; its entry has both phone and LID) and cached for 30 minutes (one minute after a miss), with a 3-second bound so the lookup can never delay the webhook ack. Matching is exact on the whole number — `@6289500000001` is not `@628950000000`. The bot's own mention is removed from the prompt, other `@` tokens are kept.
 
-**How to get a group's JID**: `GET /user/my/groups` on gowa's REST API, or look at the `chat_id` field on a webhook message that already came in from that group.
+**Who is speaking.** The whole group shares one Claude session (sessions are per `chat_id`, [§6](#6-session-continuity-model)), so the prompt starts with `[Pesan dari <name> di grup tim]`. WhatsApp display names are chosen by the sender, so the name is cleaned (control characters, brackets, length) before it goes into the prompt.
 
-**Verified**: `internal/config/config_test.go` — DMs allowed/denied according to `ALLOWED_SENDERS`, groups allowed/denied according to `ALLOWED_GROUPS` independently of `ALLOWED_SENDERS` (including the case: a number in `ALLOWED_SENDERS` does NOT automatically get into a group that isn't allowlisted).
+**Identity.** gowa normalises the sender to a phone number in `from` (using its LID map) and also provides `from_lid`. Roster entries store the phone and, when known, the LID; either can match. A member gowa knows only by LID (no phone number) cannot be approved from the UI.
+
+**Replies.** The answer is posted to the group, quoting the request (`reply_message_id`) so everybody can see which question it belongs to; if gowa refuses the quote the answer is sent unquoted rather than lost.
+
+**Matching is exact** (`access.SplitJID`): user part and server part must both match, the `:device` suffix of a multi-device JID is ignored (the owner's second device is still the owner), a bare number only matches phone-number JIDs (`@s.whatsapp.net`) and is never a prefix of a longer number, and an `@lid` identifier never matches a phone number. The policy is enforced again when the pending queue is replayed at startup (mention aside, which was verified on arrival), so a message queued before its sender was removed or un-approved is dropped instead of executed.
+
+**Privacy.** WhatsApp delivers *every* message of the group to the bot's linked device, and gowa keeps a copy of everything it receives — including group chatter that never mentions the bot — in `./data/whatsapp/chatstorage.db`. The bridge ignores non-mentions immediately, but the people in a team group should be told the bot account can see the whole group.
+
+**Not covered by the policy.** Whoever controls an approved WhatsApp account controls this machine, and content an approved person forwards can carry instructions aimed at Claude (prompt injection). In team mode the blast radius is every approved member, so run the bridge as a dedicated unprivileged user (or VM), point `WORK_DIR` at a project folder instead of `$HOME`, and avoid passwordless `sudo`.
+
+**Diagnosing mentions.** `LOG_GROUP_MESSAGES=1` logs sender, `from_lid`, display name, the bot identity the bridge is using, the (truncated) text and the decision for every group message. It writes message text to the journal, so switch it off again afterwards.
+
+**Verified**: `internal/access/access_test.go` (decision table for both modes, exact matching, LID handling, default-deny for newcomers, empty roster, stripping of the mention, config validation, hot reload, corrupt file → deny everybody) and `internal/webhook/allowlist_test.go`, which pushes real HMAC-signed webhooks through the handler against a fake `claude` and a fake gowa and asserts whether Claude ran and what it was told. The security rules were mutation-tested: breaking any of them (let non-approved members through, ignore the mention, accept another group, serve groups in personal mode, loosen LID matching) makes tests fail.
 
 ## 11. Security
 
 - **HMAC signature**: every webhook from gowa is signed with `HMAC-SHA256` using `WEBHOOK_SECRET` (header `X-Hub-Signature-256: sha256=<hex>`). The bridge rejects (`401`) requests whose signature doesn't match — see `webhook.Handler.validSignature`.
-- **Sender allowlist**: `ALLOWED_SENDERS` (env var, required — the bridge refuses to start if empty) limits whose messages are processed. This is the **sender's** phone number (`payload.from`), not the bridge's own device number. Everything else is ignored before anything is queued or run; there is a single path from a webhook to `claude -p`, and `internal/webhook/allowlist_test.go` drives real signed webhooks through it against a fake `claude` to prove that unknown senders, bad/missing signatures, the bot's own messages and unlisted groups never reach Claude. See [§10](#10-per-group-access-control) for how matching works.
-- **What the allowlist does not cover**: whoever controls an allowed WhatsApp account controls the machine (enable WhatsApp two-step verification on it), and text or files an allowed sender forwards can carry instructions aimed at Claude (prompt injection) — treat forwarded content with the same care as running it yourself.
+- **Access policy**: personal mode (one phone number, DMs only) or team mode (one group, approved members, @mention required) — see [§10](#10-access-control-personal-and-team-modes). `ALLOWED_SENDERS` (required — the bridge refuses to start if empty) seeds personal mode so a fresh install can never be open. Everything else is ignored before anything is queued or run; there is a single path from a webhook to `claude -p`, and `internal/webhook/allowlist_test.go` drives real signed webhooks through it against a fake `claude` to prove that unknown senders, bad/missing signatures, the bot's own messages, non-approved members, non-mentions and other groups never reach Claude.
+- **What the policy does not cover**: whoever controls an allowed WhatsApp account controls the machine (enable WhatsApp two-step verification on it), and text or files an allowed sender forwards can carry instructions aimed at Claude (prompt injection) — treat forwarded content with the same care as running it yourself. In team mode every approved member counts as such an account.
 - **Basic auth to gowa**: the bridge authenticates to gowa's REST API with the same `GOWA_BASIC_AUTH_USER/PASSWORD` that is set on gowa through the `--basic-auth` flag.
 - **Claude permissions**: the `claude -p` subprocess runs with `--permission-mode auto` (Claude Code's built-in permission classifier, not `--dangerously-skip-permissions`) — risky tool calls still need approval/are blocked according to the same auto-mode policy as an ordinary interactive session.
-- **Admin UI**: by default only `127.0.0.1`. Binding to another address requires naming a specific IP (`0.0.0.0` is refused) and `ADMIN_ALLOWED_NETS`; client IPs outside that list are rejected before the request is processed. Optional `ADMIN_PASSWORD` (basic auth). The `Host` header is validated (anti DNS-rebinding), POSTs must carry an `X-Admin-Request` header and a matching `Origin` (anti-CSRF), and the QR image proxy is restricted to gowa's QR directory. The OAuth code pasted during Claude sign-in is not stored and is redacted from output. See §16.
+- **Admin UI**: by default only `127.0.0.1`. Binding to another address requires naming a specific IP (`0.0.0.0` is refused) and `ADMIN_ALLOWED_NETS`; client IPs outside that list are rejected before the request is processed. `ADMIN_PASSWORD` (basic auth) is **mandatory** as soon as it listens beyond loopback — the page decides who may run commands on the machine, so the admin refuses to start otherwise. The `Host` header is validated (anti DNS-rebinding), POSTs must carry an `X-Admin-Request` header and a matching `Origin` (anti-CSRF), and the QR image proxy is restricted to gowa's QR directory. The OAuth code pasted during Claude sign-in is not stored and is redacted from output. See §16.
 - **Secrets**: `.env` (holding `WEBHOOK_SECRET` and the gowa password) is in `.gitignore` and never enters git. `.env.example` is placeholders only.
 - **Not a sandbox**: the `claude -p` process runs as the ordinary Linux user that runs the bridge — its filesystem/command access is exactly what that user has on that machine. If that user has passwordless `sudo` (common in single-user setups such as a personal Raspberry Pi), Claude triggered through WhatsApp can also run `sudo` — and this **actually happened** while implementing §7.1 (`apt-get install cmake`, `mkdir`/`chown` for `data/whisper/`, all via passwordless `sudo`, triggered from a WhatsApp message). `--permission-mode auto` is a heuristic safety net (Claude Code's built-in classifier), **not** a formal security boundary like an isolated container — consider this before giving the bridge access to an account with broad privileges.
 
 ## 12. Not implemented yet
 
-- Mention-gating in groups (reply only when mentioned) — can't be built right now, gowa doesn't expose mention data in the webhook (see [§10](#10-per-group-access-control)). Per-group access control itself **exists**, at group level rather than member level.
 - Tool-call approval via emoji reaction — before a risky tool call (e.g. `sudo`), Claude stops and asks for a 👍/👎 confirmation on WhatsApp. The researched design direction: Claude Code's `PreToolUse` hooks (they can block a tool call and also run in `-p` mode) — not implemented yet, its stdin/stdout protocol needs to be tested empirically first.
 - Cross-chat rate limiting — the per-chat lock ([§9](#9-per-chat-locking-concurrency)) prevents races within the same chat, but there is no cap yet on the number of parallel `claude -p` processes across many different chats at once.
 
@@ -269,8 +285,10 @@ Note that `go test -race` does not work on this Pi 5 (`ThreadSanitizer: unsuppor
 | `GOWA_BASE_URL` | bridge | `http://localhost:3011` | gowa REST API endpoint |
 | `GOWA_BASIC_AUTH_USER/PASSWORD` | bridge, gowa | — | Basic-auth credentials for gowa's REST API |
 | `WEBHOOK_SECRET` | bridge, gowa | — (**required**) | HMAC key, must be identical on both sides |
-| `ALLOWED_SENDERS` | bridge | — (**required**) | JIDs/numbers, comma-separated, allowed to DM ([§10](#10-per-group-access-control)) |
-| `ALLOWED_GROUPS` | bridge | (empty = groups disabled) | Group JIDs (`...@g.us`), comma-separated, allowed to chat ([§10](#10-per-group-access-control)) |
+| `ALLOWED_SENDERS` | bridge | — (**required**) | Your phone number: seeds personal mode until a policy is saved in the Admin UI. Personal mode has exactly one number; extra entries are ignored with a warning ([§10](#10-access-control-personal-and-team-modes)) |
+| `ALLOWED_GROUPS` | bridge | — | **Deprecated**, admits nobody (the bridge only warns). Use team mode in the Admin UI |
+| `ACCESS_FILE` | bridge, admin | `~/.claude-whatsapp/access.json` | Access policy written by the Admin UI, re-read by the bridge on change. A broken file denies everybody |
+| `LOG_GROUP_MESSAGES` | bridge | (off) | `1` logs group message text, sender and decision to diagnose mention detection |
 | `CLAUDE_BIN` | bridge | `claude` | Path to the `claude` CLI binary |
 | `WORK_DIR` | bridge | `$HOME` | cwd `claude -p` runs in — this is what lets the cross-project instructions in `~/CLAUDE.md` be read |
 | `SESSION_STORE_PATH` | bridge | `~/.claude-whatsapp/sessions.json` | Location of the chat_id → session_id map |
@@ -284,7 +302,7 @@ Note that `go test -race` does not work on this Pi 5 (`ThreadSanitizer: unsuppor
 | `ADMIN_ADDR` | admin | `127.0.0.1:8098` | Comma-separated `host:port` list the Admin UI listens on. Non-loopback requires specific IPs + `ADMIN_ALLOWED_NETS`. Addresses that don't exist yet at boot are retried every 5 seconds |
 | `ADMIN_ALLOWED_NETS` | admin | (empty) | Client CIDRs allowed to connect, comma-separated (loopback is always allowed). **Required** if `ADMIN_ADDR` contains a non-loopback address |
 | `ADMIN_ALLOWED_HOSTS` | admin | (empty) | Extra `Host` names to accept (the hosts from `ADMIN_ADDR` are automatic) |
-| `ADMIN_PASSWORD` | admin | (empty) | If set, every request needs basic auth (user `admin`) |
+| `ADMIN_PASSWORD` | admin | (empty) | Basic auth (user `admin`) for every request. **Required** whenever `ADMIN_ADDR` listens beyond loopback |
 
 ## 14. Deployment & persistence
 
@@ -314,6 +332,7 @@ The **Admin UI** (`cmd/admin`, `internal/admin`) is a separate process from the 
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/status` | Aggregate: the bridge's systemd unit + `/health`, pending queue, number of chats, Docker containers, gowa device status (`/app/status`), and `claude auth status`. Produces an `ok` / `degraded` / `down` verdict with its reasons |
+| `GET/POST /api/access`, `GET /api/access/groups`, `GET /api/access/members?group=` | The "Who can instruct the bot" card: read/save the access policy, list the bot's groups, list a group's members next to their approval state. Saving validates and writes `access.json` atomically; the bridge picks it up on the next message |
 | `GET /api/logs` | The bridge's `journalctl` or gowa's `docker logs` |
 | `POST /api/wa/qr`, `GET /api/wa/qr.png`, `POST /api/wa/pair-code` | WhatsApp pairing. If gowa has no device yet, a new one is created automatically |
 | `POST /api/wa/reconnect`, `POST /api/wa/logout` | Connection recovery / unlink (logout must carry `confirm: "LOGOUT"`) |

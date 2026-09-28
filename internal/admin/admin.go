@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tarkiman/claude-whatsapp/internal/access"
 	"github.com/tarkiman/claude-whatsapp/internal/config"
 	"github.com/tarkiman/claude-whatsapp/internal/gowa"
 )
@@ -58,6 +59,8 @@ type Server struct {
 	mux  *http.ServeMux
 	opts Options
 
+	access *access.Store
+
 	claudeMu  sync.Mutex
 	claudeAt  time.Time
 	claudeVal *ClaudeInfo
@@ -66,7 +69,8 @@ type Server struct {
 }
 
 func New(cfg *config.Config, g *gowa.Client, opts Options) *Server {
-	s := &Server{cfg: cfg, gowa: g, mux: http.NewServeMux(), opts: opts}
+	legacy, _ := access.Legacy(cfg.AllowedSenders)
+	s := &Server{cfg: cfg, gowa: g, mux: http.NewServeMux(), opts: opts, access: access.Open(cfg.AccessFile, legacy)}
 
 	sub, _ := fs.Sub(webFS, "web")
 	s.mux.Handle("/", http.FileServer(http.FS(sub)))
@@ -79,6 +83,10 @@ func New(cfg *config.Config, g *gowa.Client, opts Options) *Server {
 	s.mux.HandleFunc("POST /api/wa/reconnect", s.handleReconnect)
 	s.mux.HandleFunc("POST /api/wa/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/wa/status", s.handleWAStatus)
+	s.mux.HandleFunc("GET /api/access", s.handleAccessGet)
+	s.mux.HandleFunc("POST /api/access", s.handleAccessSave)
+	s.mux.HandleFunc("GET /api/access/groups", s.handleAccessGroups)
+	s.mux.HandleFunc("GET /api/access/members", s.handleAccessMembers)
 	s.mux.HandleFunc("GET /api/claude/login", s.handleLoginState)
 	s.mux.HandleFunc("POST /api/claude/login/start", s.handleLoginStart)
 	s.mux.HandleFunc("POST /api/claude/login/code", s.handleLoginCode)

@@ -6,7 +6,7 @@ Chat with [Claude Code](https://claude.com/claude-code) over WhatsApp. Each inco
 
 ![Admin dashboard](docs/images/dashboard.png)
 
-**Contents:** [How it works](#how-it-works) · [Read this first](#read-this-first-security) · [Quick start](#quick-start) · [Admin UI](#admin-ui) · [Configuration](#configuration) · [Upgrade & uninstall](#upgrade--uninstall) · [Manual install](#manual-install-from-source) · [Troubleshooting](#troubleshooting) · [Features](#features)
+**Contents:** [How it works](#how-it-works) · [Read this first](#read-this-first-security) · [Quick start](#quick-start) · [Who can instruct the bot](#who-can-instruct-the-bot) · [Admin UI](#admin-ui) · [Configuration](#configuration) · [Upgrade & uninstall](#upgrade--uninstall) · [Manual install](#manual-install-from-source) · [Troubleshooting](#troubleshooting) · [Features](#features)
 
 ## How it works
 
@@ -33,8 +33,8 @@ Two WhatsApp numbers are involved:
 
 ## Read this first (security)
 
-- **This is not a sandbox.** `claude -p` runs as the Linux user that installed the bridge, with `--permission-mode auto`. Anyone in `ALLOWED_SENDERS` (or a member of a group in `ALLOWED_GROUPS`) can effectively make Claude read files and run commands on that machine — including `sudo` if that user has passwordless `sudo`. Only allow numbers you fully trust, and consider installing it under a separate unprivileged user or VM. Details in [`docs/ARCHITECTURE.md` §11](docs/ARCHITECTURE.md#11-security).
-- **The allowlist is the only gate — protect the numbers on it.** Messages from any number not in `ALLOWED_SENDERS` are ignored before anything runs (matching is exact, see [`docs/ARCHITECTURE.md` §10](docs/ARCHITECTURE.md#10-per-group-access-control)). But whoever controls an allowed WhatsApp account controls the machine, so turn on WhatsApp two-step verification for it. Content an allowed sender forwards (messages, documents) can also carry instructions aimed at Claude — treat forwarded content like something you are about to run yourself. Groups are off unless listed in `ALLOWED_GROUPS`, and then every member counts.
+- **This is not a sandbox.** `claude -p` runs as the Linux user that installed the bridge, with `--permission-mode auto`. Anyone allowed to instruct the bot (the one number in personal mode, every approved member in team mode) can effectively make Claude read files and run commands on that machine — including `sudo` if that user has passwordless `sudo`. Only allow people you fully trust, and consider installing it under a separate unprivileged user or VM. Details in [`docs/ARCHITECTURE.md` §11](docs/ARCHITECTURE.md#11-security).
+- **The access policy is the only gate — protect the accounts on it.** Anything from a number that is not allowed is ignored before anything runs (matching is exact, see [`docs/ARCHITECTURE.md` §10](docs/ARCHITECTURE.md#10-access-control-personal-and-team-modes)), and a broken policy file denies everybody. But whoever controls an allowed WhatsApp account controls the machine, so turn on WhatsApp two-step verification for it. Content an allowed person forwards (messages, documents) can also carry instructions aimed at Claude — treat forwarded content like something you are about to run yourself.
 - **Unofficial WhatsApp client.** gowa/whatsmeow is not an official WhatsApp product; using it may go against WhatsApp's terms of service and can get an account restricted. Use at your own risk — preferably with a dedicated number.
 - **Keep `.env` and `data/` private.** `.env` holds the webhook secret and the gowa password; `data/whatsapp/` is the live WhatsApp session (full access to the bot account). Both are in `.gitignore` — never commit or share them.
 - **The Admin UI is for you only.** It can re-link WhatsApp and change the Claude login. By default it is reachable only from the machine itself; don't expose it to the internet. See [Admin UI](#admin-ui).
@@ -96,6 +96,38 @@ This login is shared by **every** Claude Code session of that Linux user, not ju
 
 From the sender number, send any WhatsApp message to the bot number. The overall status in the Admin UI should read **All good**. If nothing comes back, see [Troubleshooting](#troubleshooting).
 
+Out of the box the bot is in **personal mode**: only your sender number can instruct it, and groups are ignored. To let a team use it in a WhatsApp group, see [Who can instruct the bot](#who-can-instruct-the-bot).
+
+## Who can instruct the bot
+
+Instructions become commands on your machine, so the bot has exactly two modes, both managed from the **Who can instruct the bot** card of the [Admin UI](#admin-ui). Changes apply from the very next message — no restart.
+
+| | **Personal** (default) | **Team** |
+|---|---|---|
+| Who | exactly one phone number | members of one WhatsApp group whom you approved |
+| Where | direct messages only; groups are ignored | that group only; DMs are ignored |
+| Trigger | any message | only messages that **@mention the bot** |
+| New people | — | denied until you tick them |
+
+![Team mode in the Admin UI](docs/images/access-team.png)
+
+**Personal mode** is what you get after installation, using the number you gave the installer. To change it, type another number in the card and save — there is only ever one.
+
+**Team mode** — the goal is a shared agent that a whole team can see working:
+
+1. Create a WhatsApp group and add the **bot's number** to it, plus your teammates.
+2. In the Admin UI choose **Team**, press **Load groups**, pick the group. Its current members appear with a checkbox each.
+3. Tick the people who may instruct the bot (or **Approve all current members**) and press **Save team**.
+4. Approved members write `@bot <request>` in the group. The bot answers **in the group, quoting the request**, so everybody sees the progress. Everyone shares one Claude session per group, and the bot knows who is speaking.
+
+Things worth knowing:
+
+- **Approval is explicit.** Someone added to the WhatsApp group later is *not* allowed until you tick them in the card; an empty roster allows nobody. Messages that don't mention the bot are ordinary chat and are ignored, whoever writes them.
+- **Every approved member is effectively an administrator of this machine** (see [security](#read-this-first-security)). For a team, run the bridge as a dedicated unprivileged user or VM, point `WORK_DIR` at a project folder instead of `$HOME`, and avoid passwordless `sudo`.
+- **Privacy.** WhatsApp delivers every message of the group to the bot's account, and gowa keeps a copy of all of them (including chatter that never mentions the bot) in `data/whatsapp/chatstorage.db`. Tell your team the bot account can see the whole group.
+- **The mention must be a real @mention** (pick the bot from the suggestions when typing `@`). Detection is done on the message text, accepting the bot's phone number or its WhatsApp LID. If it doesn't react, set `LOG_GROUP_MESSAGES=1` in `.env`, restart, mention the bot once and read `journalctl --user -u claude-whatsapp.service` — the `group-message:` line shows exactly what arrived and why it was accepted or ignored (it logs message text, so switch it off again).
+- People WhatsApp knows only by an internal ID (no phone number visible) can't be approved; the card marks them.
+
 ## Admin UI
 
 A status and recovery page at `http://127.0.0.1:8098`, run as its own service (`claude-whatsapp-admin`) so it stays reachable precisely when the bridge is the thing that is broken.
@@ -119,10 +151,10 @@ Or serve it directly on your LAN / [ZeroTier](https://www.zerotier.com/) by sett
 ```bash
 ADMIN_ADDR=127.0.0.1:8098,192.168.1.20:8098,10.147.20.15:8098   # this machine's specific IPs; 0.0.0.0 is refused
 ADMIN_ALLOWED_NETS=192.168.1.0/24,10.147.0.0/16                  # only clients from these networks are served
-ADMIN_PASSWORD=<long-random-string>                              # optional but strongly recommended
+ADMIN_PASSWORD=<long-random-string>                              # REQUIRED once the page listens beyond loopback
 ```
 
-Clients outside `ADMIN_ALLOWED_NETS` are rejected right away (403), and an IP that doesn't exist yet at boot (e.g. a ZeroTier interface) is retried every 5 seconds. This is plain HTTP: a network restriction alone doesn't protect you from other users on the same network, so set `ADMIN_PASSWORD` if you don't fully trust the network, and never expose the page to the public internet.
+Clients outside `ADMIN_ALLOWED_NETS` are rejected right away (403), and an IP that doesn't exist yet at boot (e.g. a ZeroTier interface) is retried every 5 seconds. This is plain HTTP, and this page decides who can make Claude run commands on the machine — so `ADMIN_PASSWORD` is **mandatory** whenever it listens beyond loopback (the admin refuses to start without it). Never expose the page to the public internet.
 
 ## Configuration
 
@@ -130,8 +162,10 @@ Everything lives in `.env` in the install directory (`chmod 600`; fully commente
 
 | Variable | Purpose |
 |---|---|
-| `ALLOWED_SENDERS` | **Required.** Sender numbers allowed to give commands (JIDs like `6281…@s.whatsapp.net`, comma-separated). The bridge refuses to start if empty. |
-| `ALLOWED_GROUPS` | Optional. Group JIDs (`…@g.us`) allowed to use the bot; empty = DMs only. Once a group is listed, **every** member can trigger the bot. |
+| `ALLOWED_SENDERS` | **Required.** Your phone number — the starting point of personal mode (exactly one number; extra entries are ignored). Once you save a policy in the Admin UI it lives in `access.json` and this value is no longer used. |
+| `ACCESS_FILE` | Where the access policy is stored (default `~/.claude-whatsapp/access.json`). A broken file makes the bridge deny everybody. |
+| `LOG_GROUP_MESSAGES` | `1` logs group message text, sender and the decision — for diagnosing @mention detection. Off by default. |
+| `ALLOWED_GROUPS` | **Deprecated** — admits nobody any more. Use team mode in the Admin UI. |
 | `WEBHOOK_SECRET` | HMAC key between gowa and the bridge — generated randomly by the installer. |
 | `GOWA_BASIC_AUTH_USER/PASSWORD` | Credentials for gowa's REST API — the password is generated randomly by the installer. |
 | `WORK_DIR` | Working directory of `claude -p` (default `$HOME`; this is where your `CLAUDE.md` is picked up). |
@@ -214,6 +248,7 @@ Start with the [Admin UI](#admin-ui): the status, the reasons and the logs usual
 
 | Symptom | Likely cause | Check |
 |---|---|---|
+| Bot ignores my @mention in the group | Not in team mode, the sender isn't ticked in the roster, the group isn't the selected one, or the text isn't a real @mention of the bot | Admin UI → *Who can instruct the bot*; set `LOG_GROUP_MESSAGES=1` and read the `group-message:` log line |
 | Bot silent although the service is `active` | WhatsApp session deleted/unlinked (Admin UI: `Down` + "logged out"), or gowa lost its connection | Admin UI → **Reconnect**, or pair again. `docker logs claude-whatsapp-gowa` |
 | No reply at all | `claude` not found on the systemd service's `$PATH`, or not signed in | `journalctl --user -u claude-whatsapp.service -n 50` — look for `executable file not found`; check the **Claude account** card |
 | Generic "there was an error on my side" reply | `claude -p` failed/timed out, or another gowa endpoint failed | Same log — the error message is specific |
@@ -231,10 +266,10 @@ Start with the [Admin UI](#admin-ui): the status, the reasons and the logs usual
 - **Voice notes** — transcribed locally (`whisper.cpp`, multilingual, no cloud API) before being sent to `claude -p`. Optional. On a Raspberry Pi 5 (4 CPU threads) the `base` model runs ~2.3x faster than real time.
 - **Durability** — messages are written to an on-disk queue (`~/.claude-whatsapp/pending/`) before being acked to gowa and replayed automatically if the bridge died mid-flight.
 - **One `claude -p` per chat at a time** — locked per `chat_id`; further messages for the same chat queue instead of fighting over the same `--resume` session.
-- **Per-group access control** — `ALLOWED_GROUPS` is separate from `ALLOWED_SENDERS`. Once a group is listed, every member can trigger the bot (gowa's webhook carries no @-mention data, see [`docs/ARCHITECTURE.md` §10](docs/ARCHITECTURE.md#10-per-group-access-control)).
+- **Personal and team modes** — one number in DMs, or one group with an approved roster and required @mention; managed from the Admin UI and applied without a restart ([above](#who-can-instruct-the-bot)).
 - **Admin UI** — status, WhatsApp recovery and Claude sign-in ([above](#admin-ui)).
 
-**Not implemented yet:** mention-gating in groups (a data limitation from gowa), tool-call approval via emoji reaction, and cross-chat rate limiting (every different chat is its own `claude -p` process, with no cap on how many run in parallel). Contributions and PRs welcome.
+**Not implemented yet:** tool-call approval via emoji reaction, and cross-chat rate limiting (every different chat is its own `claude -p` process, with no cap on how many run in parallel). Contributions and PRs welcome.
 
 ## Repository layout
 

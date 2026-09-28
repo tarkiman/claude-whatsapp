@@ -64,7 +64,7 @@ sequenceDiagram
     W->>G: Deliver (whatsmeow)
     G->>B: POST /webhook<br/>event=message, HMAC di header X-Hub-Signature-256
     activate B
-    B->>B: Verifikasi HMAC · filter (is_from_me, allowlist)
+    B->>B: Verifikasi HMAC · filter (is_from_me) · kebijakan akses (§10)
     B->>B: buildPrompt() — gabung body/caption +<br/>instruksi lampiran kalau ada (lihat §7)
     B->>P: Write(message_id, prompt, ...)
     Note over P: Ditulis SEBELUM ack — kalau bridge mati<br/>persis setelah ack, ini yang jadi bukti untuk direplay
@@ -127,6 +127,7 @@ claude-whatsapp/
 ├── cmd/admin/main.go           # entrypoint Admin UI — lihat §16
 ├── internal/
 │   ├── config/config.go        # baca .env, validasi (ALLOWED_SENDERS & WEBHOOK_SECRET wajib)
+│   ├── access/access.go        # kebijakan akses: mode personal/tim, roster, deteksi mention, penyimpanan access.json — §10
 │   ├── gowa/client.go          # REST client tipis ke gowa (SendMessage, SetChatPresence, React)
 │   ├── gowa/admin.go           # operasi device untuk Admin UI (status, QR, pair code, logout)
 │   ├── admin/                  # Admin UI: handler, guard jaringan, login Claude, web/index.html — §16
@@ -227,37 +228,52 @@ flowchart TD
 
 Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported VMA range` — keterbatasan kernel ARM64, bukan bug kode); test tetap valid dijalankan tanpa `-race`.
 
-## 10. Access control per-grup
+## 10. Access control (mode personal dan tim)
 
-`config.IsAllowed(chatID, from)` menggerbang DM dan grup **secara terpisah**:
+`internal/access` adalah satu-satunya tempat yang memutuskan apakah sebuah webhook boleh sampai ke Claude (`Config.Decide`). Kebijakannya berupa file JSON kecil (`ACCESS_FILE`, default `~/.claude-whatsapp/access.json`, mode `0600`) yang diedit dari Admin UI dan dibaca ulang bridge setiap kali berubah — tanpa restart. Selama file itu belum ada, `ALLOWED_SENDERS` menjadi kebijakan mode personal. Kalau file ada tetapi tidak bisa dibaca atau tidak valid, **semua orang ditolak** (gagal-tertutup); fallback dari environment tidak pernah dipakai untuk menutupi file yang rusak.
 
-- **DM** (`chat_id` berakhiran `@s.whatsapp.net`): diproses kalau `from` ATAU `chat_id` ada di `ALLOWED_SENDERS` — sama seperti sebelumnya.
-- **Grup** (`chat_id` berakhiran `@g.us`): diproses kalau `chat_id` ada di `ALLOWED_GROUPS` — **`ALLOWED_SENDERS` tidak relevan sama sekali** untuk grup. Sekali sebuah grup di-allowlist, **siapa pun anggota grup itu** bisa memicu bridge, bukan cuma nomor yang ada di `ALLOWED_SENDERS`.
+| | Personal (default) | Tim |
+|---|---|---|
+| Siapa | tepat satu nomor telepon | anggota satu grup yang ada di roster yang disetujui |
+| Di mana | hanya pesan langsung; semua grup diabaikan | hanya grup itu; DM diabaikan |
+| Pemicu | pesan apa pun | hanya pesan yang @mention bot |
+| Orang baru | — | ditolak sampai dicentang di Admin UI |
 
-**Kenapa desainnya begitu (bukan per-member di dalam grup):** payload webhook gowa untuk pesan grup tidak menyertakan data mentioned-JID (`payload.mentions` semacamnya tidak ada — sudah dicek langsung ke source gowa, bukan asumsi). Tanpa itu, bridge tidak punya cara membedakan "bot di-mention" dari "pesan biasa di grup", jadi tidak ada dasar teknis untuk mention-gating. Kontrol akses jadi di level grup: keputusan "apakah grup ini boleh pakai bridge" ada di tangan Anda saat mengisi `ALLOWED_GROUPS`, bukan di tangan bridge saat runtime.
+**Mode personal.** Satu nomor, dibandingkan secara persis. Grup diabaikan walaupun pemiliknya menulis di dalamnya.
 
-**Pencocokan bersifat persis**, pada bagian user maupun server dari JID (`config.matchesAllowlist`): suffix `:device` pada JID multi-device diabaikan (device kedua milik pemilik tetap pemilik), nomor tanpa `@` di daftar hanya cocok dengan JID nomor telepon (`@s.whatsapp.net`) dan tidak pernah dianggap awalan dari nomor yang lebih panjang, dan identifier `@lid` tidak pernah cocok dengan nomor telepon — gagal-tertutup. Allowlist diperiksa lagi saat antrian pending di-replay saat startup, jadi pesan yang sempat antre sebelum pengirimnya dihapus dari daftar dibuang, bukan dieksekusi.
+**Mode tim.** Tiga syarat harus terpenuhi sekaligus: pesan ada di grup yang dikonfigurasi, pengirimnya ada di roster yang disetujui, dan pesan itu @mention bot. Pesan yang tidak me-mention bot adalah obrolan biasa antar manusia dan dibuang diam-diam. Roster hanya berisi anggota yang *disetujui* — orang yang ditambahkan ke grup WhatsApp belakangan tidak ada di dalamnya, jadi me-mention bot tidak memberinya apa-apa sampai seseorang mencentangnya di Admin UI (yang menampilkan anggota grup saat ini lewat `GET /group/participants` milik gowa). Roster kosong berarti tidak ada yang diizinkan.
 
-**Konsekuensi praktis**: kalau ingin lebih ketat dari "semua anggota grup X boleh", satu-satunya cara sekarang adalah membatasi grup mana yang di-allowlist (grup kecil/tepercaya), bukan membatasi siapa di dalamnya.
+**Cara mention dideteksi.** Webhook gowa tidak membawa data mention terstruktur, tetapi gowa menulis ulang token `@<lid>` di `body` menjadi `@<nomor>` kalau ia tahu pemetaan LID→nomor. Karena itu bridge menerima `@<nomor bot>` (nomor diambil dari `device_id` pada event itu sendiri) dan, sebagai cadangan, `@<LID bot>`. LID bot dicari sekali dari daftar anggota grup (bot adalah anggota; entri-nya memuat nomor dan LID) dan disimpan 30 menit (satu menit kalau gagal), dengan batas 3 detik supaya pencarian tidak pernah menunda ack webhook. Pencocokan persis pada seluruh angka — `@6289500000001` bukan `@628950000000`. Mention ke bot dibuang dari prompt, token `@` lain dipertahankan.
 
-**Cara dapat JID grup**: `GET /user/my/groups` di REST API gowa, atau lihat field `chat_id` pada webhook pesan yang sudah pernah masuk dari grup itu.
+**Siapa yang bicara.** Seluruh grup berbagi satu sesi Claude (sesi per `chat_id`, [§6](#6-model-kontinuitas-sesi)), jadi prompt diawali `[Pesan dari <nama> di grup tim]`. Nama tampilan WhatsApp ditentukan pengirimnya, jadi nama dibersihkan (karakter kontrol, kurung siku, panjang) sebelum masuk ke prompt.
 
-**Verified**: `internal/config/config_test.go` — DM diizinkan/ditolak sesuai `ALLOWED_SENDERS`, grup diizinkan/ditolak sesuai `ALLOWED_GROUPS` independen dari `ALLOWED_SENDERS` (termasuk kasus: nomor yang ada di `ALLOWED_SENDERS` TIDAK otomatis bisa masuk ke grup yang belum di-allowlist).
+**Identitas.** gowa menormalkan pengirim menjadi nomor telepon di `from` (memakai peta LID-nya) dan juga menyediakan `from_lid`. Entri roster menyimpan nomor dan, kalau diketahui, LID; keduanya bisa cocok. Anggota yang oleh gowa hanya dikenal lewat LID (tanpa nomor) tidak bisa disetujui dari UI.
+
+**Balasan.** Jawaban diposting ke grup dengan mengutip permintaannya (`reply_message_id`) supaya semua orang tahu jawaban itu untuk pertanyaan yang mana; kalau gowa menolak kutipannya, jawaban dikirim tanpa kutipan, bukan hilang.
+
+**Pencocokan bersifat persis** (`access.SplitJID`): bagian user dan bagian server harus sama, suffix `:device` pada JID multi-device diabaikan (device kedua milik pemilik tetap pemilik), nomor tanpa `@` hanya cocok dengan JID nomor telepon (`@s.whatsapp.net`) dan tidak pernah menjadi awalan dari nomor yang lebih panjang, dan identifier `@lid` tidak pernah cocok dengan nomor telepon. Kebijakan diperiksa lagi saat antrian pending di-replay saat startup (kecuali mention, yang sudah diverifikasi saat pesan datang), jadi pesan yang sempat antre sebelum pengirimnya dihapus atau dicabut persetujuannya dibuang, bukan dieksekusi.
+
+**Privasi.** WhatsApp mengirim *setiap* pesan grup ke linked device bot, dan gowa menyimpan salinan semua yang ia terima — termasuk obrolan grup yang tidak pernah me-mention bot — di `./data/whatsapp/chatstorage.db`. Bridge langsung mengabaikan yang bukan mention, tetapi orang-orang di grup tim sebaiknya diberi tahu bahwa akun bot bisa melihat seluruh grup.
+
+**Yang tidak dicakup kebijakan.** Siapa pun yang menguasai akun WhatsApp yang disetujui menguasai mesin ini, dan konten yang diteruskan orang yang disetujui bisa membawa instruksi yang ditujukan ke Claude (prompt injection). Di mode tim, blast radius-nya adalah setiap anggota yang disetujui, jadi jalankan bridge sebagai user tanpa hak istimewa (atau VM) khusus, arahkan `WORK_DIR` ke folder proyek alih-alih `$HOME`, dan hindari `sudo` tanpa password.
+
+**Mendiagnosis mention.** `LOG_GROUP_MESSAGES=1` mencatat pengirim, `from_lid`, nama tampilan, identitas bot yang dipakai bridge, teks (dipotong), dan keputusan untuk setiap pesan grup. Ini menulis teks pesan ke journal, jadi matikan lagi setelahnya.
+
+**Verified**: `internal/access/access_test.go` (tabel keputusan kedua mode, pencocokan persis, penanganan LID, tolak-secara-default untuk anggota baru, roster kosong, pembuangan mention, validasi konfigurasi, hot reload, file rusak → tolak semua) dan `internal/webhook/allowlist_test.go`, yang mendorong webhook bertanda tangan HMAC sungguhan lewat handler ke `claude` dan gowa tiruan lalu memeriksa apakah Claude berjalan dan apa yang dikatakan kepadanya. Aturan keamanannya diuji dengan mutation testing: merusak salah satunya (meloloskan anggota yang belum disetujui, mengabaikan mention, menerima grup lain, melayani grup di mode personal, melonggarkan pencocokan LID) membuat test gagal.
 
 ## 11. Keamanan
 
 - **HMAC signature**: setiap webhook dari gowa ditandatangani `HMAC-SHA256` pakai `WEBHOOK_SECRET` (header `X-Hub-Signature-256: sha256=<hex>`). Bridge menolak (`401`) request yang signature-nya tidak cocok — lihat `webhook.Handler.validSignature`.
-- **Allowlist pengirim**: `ALLOWED_SENDERS` (env var, wajib diisi — bridge menolak start kalau kosong) membatasi siapa saja yang pesannya diproses. Ini nomor HP **pengirim** (`payload.from`), bukan nomor device bridge sendiri. Selain itu semuanya diabaikan sebelum ada yang diantrekan atau dijalankan; hanya ada satu jalur dari webhook ke `claude -p`, dan `internal/webhook/allowlist_test.go` menjalankan webhook bertanda tangan sungguhan lewat jalur itu ke `claude` tiruan untuk membuktikan pengirim asing, signature salah/kosong, pesan dari bot sendiri, dan grup yang tidak terdaftar tidak pernah sampai ke Claude. Cara pencocokannya ada di [§10](#10-access-control-per-grup).
-- **Yang tidak dicakup allowlist**: siapa pun yang menguasai akun WhatsApp yang diizinkan menguasai mesin ini (aktifkan verifikasi dua langkah WhatsApp di akun itu), dan teks atau file yang diteruskan pengirim yang sah bisa berisi instruksi yang ditujukan ke Claude (prompt injection) — perlakukan konten teruskan seperti menjalankannya sendiri.
+- **Kebijakan akses**: mode personal (satu nomor telepon, hanya DM) atau mode tim (satu grup, anggota yang disetujui, wajib @mention) — lihat [§10](#10-access-control-mode-personal-dan-tim). `ALLOWED_SENDERS` (wajib — bridge menolak start kalau kosong) menjadi benih mode personal sehingga instalasi baru tidak pernah terbuka. Selain itu semuanya diabaikan sebelum ada yang diantrekan atau dijalankan; hanya ada satu jalur dari webhook ke `claude -p`, dan `internal/webhook/allowlist_test.go` menjalankan webhook bertanda tangan sungguhan lewat jalur itu ke `claude` tiruan untuk membuktikan pengirim asing, signature salah/kosong, pesan dari bot sendiri, anggota yang belum disetujui, pesan tanpa mention, dan grup lain tidak pernah sampai ke Claude.
+- **Yang tidak dicakup kebijakan**: siapa pun yang menguasai akun WhatsApp yang diizinkan menguasai mesin ini (aktifkan verifikasi dua langkah WhatsApp di akun itu), dan teks atau file yang diteruskan pengirim yang sah bisa berisi instruksi yang ditujukan ke Claude (prompt injection) — perlakukan konten teruskan seperti menjalankannya sendiri. Di mode tim, setiap anggota yang disetujui dihitung sebagai akun seperti itu.
 - **Basic auth ke gowa**: bridge otentikasi ke REST API gowa pakai `GOWA_BASIC_AUTH_USER/PASSWORD` yang sama dengan yang dipasang di gowa lewat flag `--basic-auth`.
 - **Permission Claude**: subprocess `claude -p` dijalankan dengan `--permission-mode auto` (classifier permission Claude Code bawaan, bukan `--dangerously-skip-permissions`) — tool call yang berisiko tetap butuh persetujuan/diblokir sesuai kebijakan auto-mode yang sama seperti sesi interaktif biasa.
-- **Admin UI**: default hanya `127.0.0.1`. Bind ke alamat lain wajib menyebut IP spesifik (`0.0.0.0` ditolak) dan `ADMIN_ALLOWED_NETS`; IP klien di luar daftar itu ditolak sebelum request diproses. Opsional `ADMIN_PASSWORD` (basic auth). Header `Host` divalidasi (anti DNS-rebinding), POST wajib membawa header `X-Admin-Request` dan `Origin` yang sama (anti-CSRF), dan proxy gambar QR dibatasi ke direktori QR gowa. Kode OAuth yang ditempel saat login Claude tidak disimpan dan di-redact dari output. Lihat §16.
+- **Admin UI**: default hanya `127.0.0.1`. Bind ke alamat lain wajib menyebut IP spesifik (`0.0.0.0` ditolak) dan `ADMIN_ALLOWED_NETS`; IP klien di luar daftar itu ditolak sebelum request diproses. `ADMIN_PASSWORD` (basic auth) **wajib** begitu UI mendengarkan di luar loopback — halaman ini menentukan siapa yang boleh menjalankan perintah di mesin, jadi admin menolak start tanpanya. Header `Host` divalidasi (anti DNS-rebinding), POST wajib membawa header `X-Admin-Request` dan `Origin` yang sama (anti-CSRF), dan proxy gambar QR dibatasi ke direktori QR gowa. Kode OAuth yang ditempel saat login Claude tidak disimpan dan di-redact dari output. Lihat §16.
 - **Secrets**: `.env` (berisi `WEBHOOK_SECRET`, password gowa) di-`.gitignore`, tidak pernah masuk git. `.env.example` cuma placeholder.
 - **Bukan sandbox**: proses `claude -p` jalan sebagai user Linux biasa yang menjalankan bridge — akses filesystem/perintahnya sama persis dengan yang dimiliki user itu di mesin tersebut. Kalau user itu punya `sudo` tanpa password (umum di setup single-user seperti Raspberry Pi pribadi), Claude yang dipicu lewat WhatsApp juga bisa menjalankan `sudo` — dan ini **benar-benar terjadi** saat implementasi §7.1 (`apt-get install cmake`, `mkdir`/`chown` untuk `data/whisper/` semuanya lewat `sudo` tanpa password, dipicu dari pesan WhatsApp). `--permission-mode auto` adalah jaring pengaman heuristik (classifier bawaan Claude Code), **bukan** batas keamanan formal seperti container terisolasi — pertimbangkan ini sebelum memberi bridge akses ke akun dengan privilese luas.
 
 ## 12. Belum diimplementasikan
 
-- Mention-gating di grup (balas cuma kalau di-mention) — tidak bisa dibangun sekarang, gowa tidak expose data mention di webhook (lihat [§10](#10-access-control-per-grup)). Access control per-grup sendiri **sudah ada**, level grup bukan level member.
 - Approval tool-call lewat reaction emoji — sebelum tool call berisiko (mis. `sudo`), Claude berhenti dan minta konfirmasi 👍/👎 di WhatsApp. Arah desain yang sudah diriset: `PreToolUse` hooks Claude Code (bisa memblokir tool call, jalan juga di mode `-p`) — belum diimplementasikan, protokol stdin/stdout-nya perlu dites empiris dulu.
 - Rate limiting lintas-chat — kunci per-chat ([§9](#9-kunci-per-chat-concurrency)) mencegah race di chat yang sama, tapi belum ada batas jumlah proses `claude -p` paralel across banyak chat berbeda sekaligus.
 
@@ -269,8 +285,10 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 | `GOWA_BASE_URL` | bridge | `http://localhost:3011` | Endpoint REST API gowa |
 | `GOWA_BASIC_AUTH_USER/PASSWORD` | bridge, gowa | — | Kredensial basic auth REST API gowa |
 | `WEBHOOK_SECRET` | bridge, gowa | — (**wajib**) | Kunci HMAC, harus sama di kedua sisi |
-| `ALLOWED_SENDERS` | bridge | — (**wajib**) | JID/nomor, pisah koma, yang boleh DM ([§10](#10-access-control-per-grup)) |
-| `ALLOWED_GROUPS` | bridge | (kosong = grup nonaktif) | JID grup (`...@g.us`), pisah koma, yang boleh chat ([§10](#10-access-control-per-grup)) |
+| `ALLOWED_SENDERS` | bridge | — (**wajib**) | Nomor telepon Anda: menjadi benih mode personal sampai kebijakan disimpan di Admin UI. Mode personal hanya punya satu nomor; entri tambahan diabaikan dengan peringatan ([§10](#10-access-control-mode-personal-dan-tim)) |
+| `ALLOWED_GROUPS` | bridge | — | **Deprecated**, tidak mengizinkan siapa pun (bridge hanya memberi peringatan). Pakai mode tim di Admin UI |
+| `ACCESS_FILE` | bridge, admin | `~/.claude-whatsapp/access.json` | Kebijakan akses yang ditulis Admin UI dan dibaca ulang bridge saat berubah. File rusak = semua ditolak |
+| `LOG_GROUP_MESSAGES` | bridge | (mati) | `1` mencatat teks pesan grup, pengirim, dan keputusan untuk mendiagnosis deteksi mention |
 | `CLAUDE_BIN` | bridge | `claude` | Path binary `claude` CLI |
 | `WORK_DIR` | bridge | `$HOME` | cwd tempat `claude -p` dijalankan — ini yang bikin instruksi cross-project di `~/CLAUDE.md` kebaca |
 | `SESSION_STORE_PATH` | bridge | `~/.claude-whatsapp/sessions.json` | Lokasi peta chat_id → session_id |
@@ -284,7 +302,7 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 | `ADMIN_ADDR` | admin | `127.0.0.1:8098` | Daftar `host:port` (pisah koma) tempat Admin UI listen. Non-loopback wajib IP spesifik + `ADMIN_ALLOWED_NETS`. Alamat yang belum ada saat boot dicoba ulang tiap 5 detik |
 | `ADMIN_ALLOWED_NETS` | admin | (kosong) | CIDR klien yang boleh konek, pisah koma (loopback selalu boleh). **Wajib** kalau `ADMIN_ADDR` berisi alamat non-loopback |
 | `ADMIN_ALLOWED_HOSTS` | admin | (kosong) | Nama `Host` tambahan yang diterima (host dari `ADMIN_ADDR` otomatis) |
-| `ADMIN_PASSWORD` | admin | (kosong) | Kalau diisi, semua request butuh basic auth (user `admin`) |
+| `ADMIN_PASSWORD` | admin | (kosong) | Basic auth (user `admin`) untuk setiap request. **Wajib** kalau `ADMIN_ADDR` mendengarkan di luar loopback |
 
 ## 14. Deployment & persistence
 
@@ -314,6 +332,7 @@ Detail lengkap format payload webhook: `docs/webhook-payload.md` di [repo gowa](
 | Endpoint | Fungsi |
 |---|---|
 | `GET /api/status` | Gabungan: unit systemd bridge + `/health`, antrian pending, jumlah chat, container Docker, status device gowa (`/app/status`), dan `claude auth status`. Menghasilkan verdict `ok` / `degraded` / `down` beserta alasannya |
+| `GET/POST /api/access`, `GET /api/access/groups`, `GET /api/access/members?group=` | Kartu "Who can instruct the bot": baca/simpan kebijakan akses, daftar grup bot, daftar anggota grup beserta status persetujuannya. Menyimpan memvalidasi lalu menulis `access.json` secara atomik; bridge memakainya pada pesan berikutnya |
 | `GET /api/logs` | `journalctl` bridge atau `docker logs` gowa |
 | `POST /api/wa/qr`, `GET /api/wa/qr.png`, `POST /api/wa/pair-code` | Pairing WhatsApp. Kalau gowa belum punya device, satu device baru dibuat otomatis |
 | `POST /api/wa/reconnect`, `POST /api/wa/logout` | Pemulihan koneksi / unlink (logout wajib membawa `confirm: "LOGOUT"`) |

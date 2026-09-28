@@ -23,6 +23,7 @@ type Message struct {
 	MessageID string `json:"message_id"`
 	ChatID    string `json:"chat_id"`
 	From      string `json:"from"`
+	FromLID   string `json:"from_lid,omitempty"`
 	// Prompt is the exact text sent to `claude -p` — plain message body for
 	// a text message, or body/caption plus an attachment instruction
 	// pointing at the resolved local file path (see internal/webhook/media.go).
