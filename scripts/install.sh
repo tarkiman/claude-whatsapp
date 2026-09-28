@@ -148,10 +148,12 @@ preflight() {
        Make sure it is running (sudo systemctl start docker) and that your user may use it:
        sudo usermod -aG docker \$USER   (then log in again)")
 	fi
-	command -v claude >/dev/null 2>&1 || problems+=("the Claude Code CLI ('claude') is not on your PATH. Install it with either
+	command -v claude >/dev/null 2>&1 || problems+=("the Claude Code CLI ('claude') is not on your PATH. Install it AS THE SAME REGULAR USER
+       that runs this installer (not as root or with sudo — it goes into that user's home), with either
          curl -fsSL https://claude.ai/install.sh | bash     (no Node.js needed)
          npm install -g @anthropic-ai/claude-code            (needs Node.js)
-       then open a NEW shell (or: export PATH=\"\$HOME/.local/bin:\$PATH\") so that 'claude' is found.
+       then run this installer again. If 'claude' still is not found, add it to your PATH:
+         echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && source ~/.bashrc
        You do not have to sign in now — that is done later from the admin page.")
 	command -v systemctl >/dev/null 2>&1 || problems+=("systemd was not found — the bridge runs as a systemd --user service.")
 	[ "${#problems[@]}" -eq 0 ] && return 0
@@ -164,6 +166,13 @@ preflight() {
 	echo "Fix the above, then run the same command again." >&2
 	exit 1
 }
+# The official Claude installer puts the CLI in ~/.local/bin but does not add it
+# to the current shell's PATH. Use it from there — and because scripts/deploy.sh
+# bakes this PATH into the systemd units, the bridge finds it as well.
+if ! command -v claude >/dev/null 2>&1 && [ -x "$HOME/.local/bin/claude" ]; then
+	export PATH="$HOME/.local/bin:$PATH"
+	log "Found claude in ~/.local/bin (it was not on your PATH) — using it."
+fi
 [ "$SKIP_START" -eq 1 ] || preflight
 
 # --- .env ------------------------------------------------------------------

@@ -2,6 +2,15 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.3.2] — 2026-09-29
+
+Found on the second attempt on the same set-top box: Claude had been installed while logged in as `root`, so the regular user running the installer could not see it.
+
+### Fixed
+
+- The installer now uses a `claude` found in `~/.local/bin` even when that directory is not on `PATH` (the official Claude installer puts the CLI there but does not add it to the current shell), and the directory ends up in the systemd units' `PATH`, so the bridge finds it as well.
+- The "Claude CLI missing" message now says to install it **as the same regular user** that runs the installer (not root / `sudo`), and shows the exact line that puts `~/.local/bin` on your `PATH`. README (EN/ID) troubleshooting has a row for it.
+
 ## [0.3.1] — 2026-09-29
 
 Found by installing from scratch on a fresh ARM set-top box (Docker present, Claude CLI not).
