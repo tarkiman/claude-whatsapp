@@ -29,7 +29,7 @@ Ada dua nomor WhatsApp yang berperan:
 | | Fungsi | Di mana diatur |
 |---|---|---|
 | **Nomor bot** | Nomor yang **ditautkan** ke gowa sebagai *linked device* — ke nomor inilah Anda mengirim pesan. Sebaiknya nomor khusus, bukan nomor utama Anda. | Pairing lewat [Admin UI](#3-tautkan-whatsapp) |
-| **Nomor pengirim** | Nomor HP **Anda** yang boleh memberi perintah ke bot. Pesan dari nomor lain diabaikan. | `ALLOWED_SENDERS` di `.env` |
+| **Nomor pengirim** | Nomor HP **Anda** yang boleh memberi perintah ke bot. Pesan dari nomor lain diabaikan. | Admin UI → *Who can instruct the bot* (diisi awal dari `ALLOWED_SENDERS` di `.env`) |
 
 ## Baca ini dulu (keamanan)
 
@@ -73,6 +73,7 @@ curl -sSL .../quick-install.sh | bash -s -- --allowed-senders 6281234567890 --no
 | `--dir <path>` | lokasi instalasi (default `~/claude-whatsapp`) |
 | `--version <tag>` | pasang versi tertentu, mis. `v0.1.0` (default: rilis terbaru) |
 | `--gowa-port <port>` | port gowa di host (default `3011`) |
+| `--tarball <file>` | pakai tarball rilis lokal alih-alih mengunduh |
 | `--skip-start` | cuma siapkan `.env`, jangan jalankan Docker/service |
 | `--non-interactive` | jangan bertanya apa pun |
 
@@ -133,6 +134,7 @@ Hal yang perlu diketahui:
 Halaman status dan pemulihan di `http://127.0.0.1:8098`, berjalan sebagai service terpisah (`claude-whatsapp-admin`) supaya tetap bisa dibuka justru saat bridge yang bermasalah.
 
 - **Status** — bridge, gowa, dan akun Claude dalam satu layar, dengan penanda **All good / Degraded / Down** beserta alasannya, plus log bridge dan gowa.
+- **Siapa yang boleh memerintah bot** — mode personal atau tim, satu nomor, grup beserta anggota yang disetujui ([di atas](#siapa-yang-boleh-memerintah-bot)).
 - **WhatsApp recovery** — Reconnect (coba ini dulu kalau status disconnected), pairing QR, pairing lewat kode, dan **Unlink** untuk pindah ke nomor bot lain.
 - **Sign in / switch Claude account** — login atau ganti akun tanpa membuka terminal.
 
@@ -175,7 +177,13 @@ Untuk mengubah `.env`: edit lalu `systemctl --user restart claude-whatsapp.servi
 
 ## Upgrade & uninstall
 
-**Upgrade** — jalankan perintah instalasi yang sama lagi. Binary dan script diganti, `.env` dan `data/` (sesi WhatsApp) dibiarkan. Hindari upgrade saat ada percakapan aktif: restart mematikan proses `claude -p` yang sedang berjalan.
+**Upgrade** — jalankan perintah instalasi yang sama lagi. Binary dan script diganti, `.env` dan `data/` (sesi WhatsApp) dibiarkan. Kebijakan akses Anda (`~/.claude-whatsapp/access.json`) juga dipertahankan. Hindari upgrade saat ada percakapan aktif: restart mematikan proses `claude -p` yang sedang berjalan.
+
+**Upgrade dari v0.1.x** — daftar lengkapnya ada di [`CHANGELOG.md`](CHANGELOG.md). Yang mungkin Anda perhatikan:
+
+- Bot mulai di **mode personal** dengan nomor pertama di `ALLOWED_SENDERS` (entri tambahan diabaikan, dengan peringatan di log). DM dari nomor itu bekerja persis seperti sebelumnya.
+- **`ALLOWED_GROUPS` tidak lagi mengizinkan siapa pun.** Grup sekarang adalah mode tim: satu grup, roster anggota yang disetujui, dan @mention wajib, diatur di Admin UI.
+- Kalau Admin UI mendengarkan di luar loopback (`ADMIN_ADDR` dengan alamat LAN/ZeroTier), **`ADMIN_PASSWORD` sekarang wajib**. Installer/`scripts/deploy.sh` membuatkannya dan memberi tahu cara membacanya (`grep ADMIN_PASSWORD .env`); browser akan meminta user `admin` dan password itu.
 
 **Uninstall:**
 
@@ -279,6 +287,7 @@ claude-whatsapp/
 ├── cmd/admin/main.go                # entrypoint Admin UI
 ├── internal/
 │   ├── admin/                       # handler Admin UI + web/index.html (di-embed)
+│   ├── access/                      # siapa yang boleh memerintah bot: kebijakan personal/tim, roster, deteksi mention
 │   ├── config/                      # baca & validasi .env
 │   ├── gowa/                        # REST client ke gowa
 │   ├── webhook/                     # verifikasi HMAC, parsing lampiran, orkestrasi
@@ -295,10 +304,11 @@ claude-whatsapp/
 │   ├── package-release.sh           # cross-compile + tarball per arsitektur
 │   └── setup-whisper.sh             # whisper.cpp + model (opsional)
 ├── .github/workflows/release.yml    # tag v* -> publish tarball arm64/armv7/amd64
+├── CHANGELOG.md                     # perubahan per rilis, termasuk catatan upgrade
 └── docs/                            # ARCHITECTURE.md, images/
 ```
 
-**Merilis versi baru:** `git tag v0.x.0 && git push origin v0.x.0` — workflow menjalankan test lalu menerbitkan tarball yang diunduh `quick-install.sh`.
+**Merilis versi baru:** `git tag v0.x.0 && git push origin v0.x.0` — workflow menjalankan test lalu menerbitkan tarball yang diunduh `quick-install.sh`. Tambahkan rilisnya ke [`CHANGELOG.md`](CHANGELOG.md) dulu.
 
 ## Lisensi
 

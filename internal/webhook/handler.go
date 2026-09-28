@@ -1,5 +1,5 @@
 // Package webhook handles inbound gowa webhook deliveries: verifies the
-// HMAC signature, filters to allowed senders, and hands text messages off
+// HMAC signature, applies the access policy (internal/access), and hands messages off
 // to the claude runner — replying asynchronously since gowa expects a 2xx
 // response within 10s and Claude can take much longer than that.
 //

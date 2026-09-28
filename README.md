@@ -29,7 +29,7 @@ Two WhatsApp numbers are involved:
 | | Role | Where it is set |
 |---|---|---|
 | **Bot number** | The number that gets **linked** to gowa as a *linked device* — you send your messages to this number. Ideally a dedicated number, not your main one. | Pairing through the [Admin UI](#3-link-whatsapp) |
-| **Sender number** | **Your** phone number, the one allowed to give commands to the bot. Messages from any other number are ignored. | `ALLOWED_SENDERS` in `.env` |
+| **Sender number** | **Your** phone number, the one allowed to give commands to the bot. Messages from any other number are ignored. | Admin UI → *Who can instruct the bot* (seeded from `ALLOWED_SENDERS` in `.env`) |
 
 ## Read this first (security)
 
@@ -73,6 +73,7 @@ curl -sSL .../quick-install.sh | bash -s -- --allowed-senders 6281234567890 --no
 | `--dir <path>` | install location (default `~/claude-whatsapp`) |
 | `--version <tag>` | install a specific version, e.g. `v0.1.0` (default: latest release) |
 | `--gowa-port <port>` | gowa's host port (default `3011`) |
+| `--tarball <file>` | use a local release tarball instead of downloading one |
 | `--skip-start` | only prepare `.env`; don't start Docker or the services |
 | `--non-interactive` | never prompt |
 
@@ -133,6 +134,7 @@ Things worth knowing:
 A status and recovery page at `http://127.0.0.1:8098`, run as its own service (`claude-whatsapp-admin`) so it stays reachable precisely when the bridge is the thing that is broken.
 
 - **Status** — bridge, gowa and Claude account on one screen, with an **All good / Degraded / Down** indicator and the reasons, plus bridge and gowa logs.
+- **Who can instruct the bot** — personal or team mode, the one number, the group and its approved members ([above](#who-can-instruct-the-bot)).
 - **WhatsApp recovery** — Reconnect (try this first when status says disconnected), pairing by QR, pairing by code, and **Unlink** to move to a different bot number.
 - **Sign in / switch Claude account** — sign in or change accounts without opening a terminal.
 
@@ -175,7 +177,13 @@ To change `.env`: edit it, then `systemctl --user restart claude-whatsapp.servic
 
 ## Upgrade & uninstall
 
-**Upgrade** — run the same install command again. Binaries and scripts are replaced; `.env` and `data/` (the WhatsApp session) are left alone. Avoid upgrading during an active conversation: the restart kills any running `claude -p`.
+**Upgrade** — run the same install command again. Binaries and scripts are replaced; `.env` and `data/` (the WhatsApp session) are left alone. Your access policy (`~/.claude-whatsapp/access.json`) is kept too. Avoid upgrading during an active conversation: the restart kills any running `claude -p`.
+
+**Upgrading from v0.1.x** — see [`CHANGELOG.md`](CHANGELOG.md) for the full list. What you may notice:
+
+- The bot starts in **personal mode** with the first number in `ALLOWED_SENDERS` (extra entries are ignored, with a warning in the log). DMs from that number work exactly as before.
+- **`ALLOWED_GROUPS` no longer admits anybody.** Groups are now team mode: one group, an approved-member roster and a required @mention, set up in the Admin UI.
+- If the Admin UI listens beyond loopback (`ADMIN_ADDR` with a LAN/ZeroTier address), **`ADMIN_PASSWORD` is now required**. The installer/`scripts/deploy.sh` generates one for you and tells you where to read it (`grep ADMIN_PASSWORD .env`); your browser will ask for user `admin` and that password.
 
 **Uninstall:**
 
@@ -279,6 +287,7 @@ claude-whatsapp/
 ├── cmd/admin/main.go                # Admin UI entrypoint
 ├── internal/
 │   ├── admin/                       # Admin UI handlers + web/index.html (embedded)
+│   ├── access/                      # who may instruct the bot: personal/team policy, roster, mention detection
 │   ├── config/                      # read & validate .env
 │   ├── gowa/                        # REST client for gowa
 │   ├── webhook/                     # HMAC verification, attachment parsing, orchestration
@@ -295,10 +304,11 @@ claude-whatsapp/
 │   ├── package-release.sh           # cross-compile + one tarball per architecture
 │   └── setup-whisper.sh             # whisper.cpp + model (optional)
 ├── .github/workflows/release.yml    # tag v* -> publish arm64/armv7/amd64 tarballs
+├── CHANGELOG.md                     # what changed per release, incl. upgrade notes
 └── docs/                            # ARCHITECTURE.md (+ .id.md), images/
 ```
 
-**Releasing:** `git tag v0.x.0 && git push origin v0.x.0` — the workflow runs the tests, then publishes the tarballs that `quick-install.sh` downloads.
+**Releasing:** `git tag v0.x.0 && git push origin v0.x.0` — the workflow runs the tests, then publishes the tarballs that `quick-install.sh` downloads. Add the release to [`CHANGELOG.md`](CHANGELOG.md) first.
 
 ## License
 

@@ -3,7 +3,8 @@
 // By default it listens on 127.0.0.1 only (reach it via an SSH tunnel). To
 // serve it on a LAN or ZeroTier address instead, set ADMIN_ADDR to those
 // specific addresses and ADMIN_ALLOWED_NETS to the client networks that may
-// connect — see .env.example.
+// connect — see .env.example. Listening beyond loopback also requires
+// ADMIN_PASSWORD, because this page decides who may run commands here.
 package main
 
 import (
