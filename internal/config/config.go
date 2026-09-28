@@ -129,9 +129,30 @@ func (c *Config) IsAllowed(chatID, from string) bool {
 	return matchesAllowlist(c.AllowedSenders, from) || matchesAllowlist(c.AllowedSenders, chatID)
 }
 
+// splitJID splits a WhatsApp JID into its user and server parts, dropping the
+// ":device" suffix multi-device JIDs carry ("6281…:12@s.whatsapp.net" is the
+// same person as "6281…@s.whatsapp.net").
+func splitJID(jid string) (user, server string) {
+	user, server, _ = strings.Cut(jid, "@")
+	user, _, _ = strings.Cut(user, ":")
+	return user, server
+}
+
+// matchesAllowlist requires an EXACT match on the user part and the server
+// part. An entry without "@" is a bare phone number and only matches
+// phone-number JIDs (@s.whatsapp.net) — never a prefix of a longer number,
+// and never an @lid identifier that merely starts with the same digits.
 func matchesAllowlist(list []string, jid string) bool {
+	user, server := splitJID(jid)
+	if user == "" {
+		return false
+	}
 	for _, a := range list {
-		if a == jid || strings.HasPrefix(jid, a) {
+		aUser, aServer := splitJID(a)
+		if aServer == "" {
+			aServer = "s.whatsapp.net"
+		}
+		if aUser == user && aServer == server {
 			return true
 		}
 	}
