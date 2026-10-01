@@ -58,7 +58,7 @@ Run as a **regular user, not with `sudo`**:
 curl -sSL https://raw.githubusercontent.com/tarkiman/claude-whatsapp/main/scripts/quick-install.sh | bash
 ```
 
-The installer downloads a prebuilt release and first **checks every prerequisite** — if anything is missing it lists it all at once, with how to fix it, and changes nothing. Then it asks for your **sender number** (your own phone number with country code and no leading 0, e.g. `6281234567890`) and for the **username and password of the admin page** (typed without echo; at least 10 characters with at least 5 different ones — a short phrase of unrelated words works well), creates `.env` with random secrets, starts gowa with Docker Compose, and installs the bridge and admin services. Everything goes into `~/claude-whatsapp`.
+The installer **checks every prerequisite before downloading anything** — if anything is missing it lists it all at once, with how to fix it, and changes nothing. Once that passes, it downloads the prebuilt release, asks for your **sender number** (your own phone number with country code and no leading 0, e.g. `6281234567890`) and for the **username and password of the admin page** (typed without echo; at least 10 characters with at least 5 different ones — a short phrase of unrelated words works well), creates `.env` with random secrets, starts gowa with Docker Compose, and installs the bridge and admin services. Everything goes into `~/claude-whatsapp`.
 
 <details>
 <summary>Installer options</summary>
