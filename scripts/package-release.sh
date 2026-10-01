@@ -43,7 +43,7 @@ for arch in "${ARCHES[@]}"; do
 
 	cp docker-compose.yml .env.example README.md README.id.md LICENSE CHANGELOG.md "$pkg/"
 	cp deploy/*.template "$pkg/deploy/"
-	cp scripts/install.sh scripts/deploy.sh scripts/setup-whisper.sh "$pkg/scripts/"
+	cp scripts/install.sh scripts/deploy.sh scripts/setup-whisper.sh scripts/preflight.sh "$pkg/scripts/"
 	cp docs/ARCHITECTURE.md docs/ARCHITECTURE.id.md "$pkg/docs/"
 	chmod +x "$pkg"/bin/* "$pkg"/scripts/*.sh
 	echo "$VERSION" >"$pkg/VERSION"

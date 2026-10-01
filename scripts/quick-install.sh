@@ -89,6 +89,24 @@ else
 	RELEASE_JSON="$(curl -sSL "$API_URL")"
 	DOWNLOAD_URL="$(echo "$RELEASE_JSON" | grep -o "\"browser_download_url\": *\"[^\"]*claude-whatsapp-[^\"]*-${ARCH}\.tar\.gz\"" | head -1 | cut -d'"' -f4)"
 	[ -n "$DOWNLOAD_URL" ] || die "could not find a release for arch '$ARCH' at https://github.com/${REPO}/releases — the repo must be public and have a release; or install manually, see the README"
+
+	# Best-effort: fetch and run the SAME prerequisite checklist install.sh
+	# would run anyway, from the exact tag being installed, before spending
+	# time/bandwidth on the (much bigger) release tarball — so a missing
+	# 'claude' or Docker is reported immediately instead of after a download
+	# that was always going to be wasted. If this can't be fetched (older
+	# release predating this file, offline mirror, GitHub hiccup), it is
+	# skipped silently: install.sh still runs the same check itself below.
+	TAG="${VERSION:-$(echo "$RELEASE_JSON" | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)}"
+	if [ -n "$TAG" ] && curl -fsSL --connect-timeout 5 --max-time 10 \
+		"https://raw.githubusercontent.com/${REPO}/${TAG}/scripts/preflight.sh" \
+		-o "$WORKDIR/preflight.sh" 2>/dev/null; then
+		log "Checking prerequisites before downloading..."
+		# shellcheck source=/dev/null
+		source "$WORKDIR/preflight.sh"
+		preflight
+	fi
+
 	log "Downloading: $DOWNLOAD_URL"
 	curl -sSL "$DOWNLOAD_URL" -o "$WORKDIR/pkg.tar.gz"
 fi
