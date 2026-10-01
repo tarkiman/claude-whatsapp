@@ -160,6 +160,8 @@ Halaman ini berada di balik login sendiri: **satu akun**, username dan password 
 
 Kartu **Discord alerts** mengirim pesan ke channel Discord saat status keseluruhan di atas berubah — `ok → degraded/down` dan kembali ke `ok` — jadi masalah seperti WhatsApp terputus (hal yang biasanya baru disadari setelah seseorang mencoba memakai bot) langsung ketahuan. Selama masalah berlanjut, pengingat berulang tiap 30 menit; tidak ada yang dikirim untuk pengecekan biasa kalau tidak ada perubahan.
 
+Pesan yang masih diproses Claude (antrian pending yang tampil di Status) bukan masalah dengan sendirinya — balasan memang bisa butuh beberapa menit — jadi baik dashboard maupun alert baru menganggapnya "degraded" kalau sudah macet lebih dari 25 menit.
+
 1. Di Discord: channel-nya *Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL*.
 2. Tempel di kartu itu, centang **Enabled**, lalu **Save**. Pakai **Send test alert** untuk memastikan benar-benar jalan sebelum diandalkan.
 
