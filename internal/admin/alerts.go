@@ -76,8 +76,7 @@ func (s *Server) handleAlertsTest(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	msg := "🔔 Test alert from claude-whatsapp's Admin UI — if you can see this, the webhook works."
-	if err := s.notifier.Send(ctx, cfg.WebhookURL, msg); err != nil {
+	if err := s.notifier.Send(ctx, cfg.WebhookURL, alerts.TestPayload()); err != nil {
 		writeErr(w, http.StatusBadGateway, err)
 		return
 	}
@@ -101,5 +100,42 @@ func (s *Server) RunAlertLoop(ctx context.Context) {
 
 func (s *Server) alertCycle(ctx context.Context) {
 	st := s.computeStatus(ctx)
-	s.alertMon.Check(ctx, s.alerts.Get(), alerts.Status{Overall: st.Overall, Reasons: st.Reasons})
+	s.alertMon.Check(ctx, s.alerts.Get(), alerts.Status{Overall: st.Overall, Reasons: st.Reasons, Components: alertComponents(st)})
+}
+
+// alertComponents turns the dashboard's detailed status into the short
+// per-component breakdown shown in a Discord alert.
+func alertComponents(st StatusResponse) []alerts.Component {
+	bridgeOK := st.Bridge.Active == "active" && st.Bridge.HealthOK
+	bridgeDetail := "active"
+	switch {
+	case st.Bridge.Active != "active":
+		bridgeDetail = "service " + st.Bridge.Active
+	case !st.Bridge.HealthOK:
+		bridgeDetail = "not answering /health"
+	}
+
+	waOK := st.WA.Reachable && !st.WA.NoDevice && st.WA.LoggedIn && st.WA.Connected
+	waDetail := "connected"
+	switch {
+	case !st.WA.Reachable:
+		waDetail = "gowa unreachable"
+	case st.WA.NoDevice:
+		waDetail = "no device linked"
+	case !st.WA.LoggedIn:
+		waDetail = "logged out"
+	case !st.WA.Connected:
+		waDetail = "disconnected"
+	}
+
+	claudeDetail := "signed in"
+	if !st.Claude.LoggedIn {
+		claudeDetail = "not signed in"
+	}
+
+	return []alerts.Component{
+		{Name: "🌉 Bridge", OK: bridgeOK, Detail: bridgeDetail},
+		{Name: "📱 WhatsApp", OK: waOK, Detail: waDetail},
+		{Name: "🤖 Claude", OK: st.Claude.LoggedIn, Detail: claudeDetail},
+	}
 }

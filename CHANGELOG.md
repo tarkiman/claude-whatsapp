@@ -2,6 +2,16 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.4.1] — 2026-10-01
+
+Discord alerts, reworked for readability right after shipping 0.4.0 — the plain-text version looked like a wall of text next to a real outage's worth of reminders.
+
+### Changed
+
+- Alerts are now proper Discord embeds instead of plain text: color-coded by severity (red/yellow/green), one field per component (bridge, WhatsApp, Claude) so you can tell what broke at a glance, and a native embed timestamp (Discord renders it localized, with a relative-time hover) instead of a hand-formatted date in the message body.
+- Recovery messages and the 30-minute reminder now state the real elapsed time (`9h 7m`, `1d 2h`) instead of a vague "still ongoing" — tracked across intermediate severity changes, so `degraded -> down -> degraded -> ok` still reports the total outage, not just the last leg.
+- *Send test alert* now sends a distinctly-colored, clearly-labeled test embed instead of a plain sentence, so it cannot be mistaken for a real alert.
+
 ## [0.4.0] — 2026-10-01
 
 Built after a real outage (Docker's DNS couldn't reach `8.8.8.8`/`1.1.1.1`, so gowa lost WhatsApp) went unnoticed until someone asked.

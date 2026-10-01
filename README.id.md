@@ -165,6 +165,10 @@ Kartu **Discord alerts** mengirim pesan ke channel Discord saat status keseluruh
 
 ![Kartu alert Discord](docs/images/discord-alerts.png)
 
+Setiap alert berupa embed Discord sungguhan, bukan tumpukan teks polos: berwarna sesuai status (merah/kuning/hijau untuk down/degraded/ok), satu baris per komponen (bridge, WhatsApp, Claude) jadi langsung terlihat apa yang rusak tanpa buka Admin UI, alasan spesifik saat ada masalah, dan — saat pulih atau pada pengingat tiap 30 menit — durasi sebenarnya (`9h 7m`, bukan cuma "masih down").
+
+![Contoh alert down diikuti alert pulih (mockup dari data payload sungguhan — tidak pernah benar-benar dikirim ke Discord)](docs/images/discord-alert-example.png)
+
 URL webhook hanya disimpan di `~/.claude-whatsapp/alerts.json` (mode `0600`) — tidak pernah di `.env`, tidak pernah ditampilkan utuh lagi setelah disimpan (halaman hanya menampilkan bentuk tersamar) — karena siapa pun yang memegangnya bisa memposting ke channel Discord itu. Pengecekan jalan tiap satu menit, dari proses admin itu sendiri, jadi alert tetap bekerja walau yang sedang mati justru bridge-nya.
 
 ### Akses dari komputer lain
