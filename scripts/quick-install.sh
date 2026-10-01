@@ -122,6 +122,16 @@ else
 	log "Installing $NEW_VERSION to $DEST"
 fi
 
+# Stop an already-running bridge/admin from a previous install before
+# overwriting their binaries below — Linux refuses to overwrite a running
+# executable's own file content ("Text file busy"), which upgrading into a
+# live install would otherwise hit. A harmless no-op on a fresh install, or
+# when a previous run never got as far as starting them (e.g. it was
+# interrupted while asking for the admin login). scripts/deploy.sh (called
+# via install.sh below) restarts them again once the new binaries are in place.
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+systemctl --user stop claude-whatsapp.service claude-whatsapp-admin.service 2>/dev/null || true
+
 mkdir -p "$DEST"
 cp -a "$EXTRACTED_DIR"/. "$DEST"/
 cd "$DEST"
