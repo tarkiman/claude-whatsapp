@@ -212,7 +212,7 @@ Untuk mengubah `.env`: edit lalu `systemctl --user restart claude-whatsapp.servi
 
 ## Upgrade & uninstall
 
-**Upgrade** — jalankan perintah instalasi yang sama lagi. Binary dan script diganti, `.env` dan `data/` (sesi WhatsApp) dibiarkan. Kebijakan akses Anda (`~/.claude-whatsapp/access.json`) juga dipertahankan. Hindari upgrade saat ada percakapan aktif: restart mematikan proses `claude -p` yang sedang berjalan.
+**Upgrade** — jalankan perintah instalasi yang sama lagi. Service bridge dan admin yang sedang jalan dihentikan dulu (supaya mengganti binary-nya tidak pernah gagal dengan "Text file busy"), baru binary dan script diganti; `.env` dan `data/` (sesi WhatsApp) dibiarkan. Kebijakan akses Anda (`~/.claude-whatsapp/access.json`) juga dipertahankan. Hindari upgrade saat ada percakapan aktif: restart mematikan proses `claude -p` yang sedang berjalan.
 
 **Upgrade dari v0.1.x** — daftar lengkapnya ada di [`CHANGELOG.md`](CHANGELOG.md). Yang mungkin Anda perhatikan:
 

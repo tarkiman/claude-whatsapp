@@ -2,6 +2,14 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.4.4] — 2026-10-02
+
+Hit for real on the same set-top box right after v0.4.3's prerequisite check fixed the previous confusing log: a prior install attempt had gotten far enough to start the bridge/admin services but was interrupted before finishing (the admin-login prompt never got an answer because the terminal session died), and re-running the installer to pick up where it left off failed outright.
+
+### Fixed
+
+- `quick-install.sh` now stops `claude-whatsapp.service`/`claude-whatsapp-admin.service` before overwriting their binaries, if a previous install left them running — otherwise Linux refuses to overwrite a running executable's own file content (`cp: cannot create regular file '.../bin/bridge': Text file busy`). `scripts/deploy.sh` (run later by `install.sh`) starts them again once the new binaries are in place, same as any other upgrade.
+
 ## [0.4.3] — 2026-10-02
 
 Reported confusing on a real install on a new set-top box: the installer downloaded the full release, printed an "Upgrade" message, and only then failed on a missing Claude CLI — wasting bandwidth and showing an "Upgrade" line right before a failure whose own message claimed "nothing was changed".

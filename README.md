@@ -212,7 +212,7 @@ To change `.env`: edit it, then `systemctl --user restart claude-whatsapp.servic
 
 ## Upgrade & uninstall
 
-**Upgrade** — run the same install command again. Binaries and scripts are replaced; `.env` and `data/` (the WhatsApp session) are left alone. Your access policy (`~/.claude-whatsapp/access.json`) is kept too. Avoid upgrading during an active conversation: the restart kills any running `claude -p`.
+**Upgrade** — run the same install command again. It stops the running bridge and admin services first (so replacing their binaries never fails with "Text file busy"), then replaces binaries and scripts; `.env` and `data/` (the WhatsApp session) are left alone. Your access policy (`~/.claude-whatsapp/access.json`) is kept too. Avoid upgrading during an active conversation: the restart kills any running `claude -p`.
 
 **Upgrading from v0.1.x** — see [`CHANGELOG.md`](CHANGELOG.md) for the full list. What you may notice:
 
