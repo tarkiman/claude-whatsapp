@@ -92,9 +92,11 @@ func (m *Monitor) Check(ctx context.Context, cfg Config, st Status) {
 
 const maxReasonsShown = 10
 
-// formatDuration renders e.g. "2h 15m", "45m", "1d 3h" — always at least one
-// unit, rounded to the minute.
-func formatDuration(d time.Duration) string {
+// FormatDuration renders e.g. "2h 15m", "45m", "1d 3h" — always at least one
+// unit, rounded to the minute. Exported so other packages (e.g. the "stuck
+// pending queue" reason on the status dashboard) describe durations the same
+// way alerts do.
+func FormatDuration(d time.Duration) string {
 	d = d.Round(time.Minute)
 	days := d / (24 * time.Hour)
 	d -= days * 24 * time.Hour
@@ -127,11 +129,11 @@ func buildPayload(st Status, from string, at time.Time, reminder bool, unhealthy
 	var desc strings.Builder
 	switch {
 	case st.Overall == "ok" && !unhealthySince.IsZero():
-		fmt.Fprintf(&desc, "Everything is back to normal after **%s** of downtime.", formatDuration(at.Sub(unhealthySince)))
+		fmt.Fprintf(&desc, "Everything is back to normal after **%s** of downtime.", FormatDuration(at.Sub(unhealthySince)))
 	case st.Overall == "ok":
 		desc.WriteString("Everything is back to normal.")
 	case reminder:
-		fmt.Fprintf(&desc, "Still **%s** — ongoing for **%s**.", strings.ToUpper(st.Overall), formatDuration(at.Sub(unhealthySince)))
+		fmt.Fprintf(&desc, "Still **%s** — ongoing for **%s**.", strings.ToUpper(st.Overall), FormatDuration(at.Sub(unhealthySince)))
 	case from != "":
 		fmt.Fprintf(&desc, "Status changed from **%s** to **%s**.", strings.ToUpper(from), strings.ToUpper(st.Overall))
 	default:

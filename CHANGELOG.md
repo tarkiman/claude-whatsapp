@@ -2,6 +2,14 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.4.2] — 2026-10-02
+
+Fixed right after a user asked whether a recurring "degraded" Discord alert ("1 message(s) waiting in the pending queue") was safe — it was, but the check behind it wasn't looking at how long the message had actually been there.
+
+### Fixed
+
+- The pending-message queue (where an inbound message sits while `claude -p` is still working on a reply — normal, by-design, and often taking several minutes) no longer flips the dashboard to "degraded" or fires a Discord alert just because it's non-empty. Both now only flag it once the oldest pending message has been stuck for over 25 minutes — comfortably past the ~20-minute worst case for a single reply (10-minute timeout, retried once) — and the dashboard shows how long the oldest message has actually been waiting instead of just a raw count.
+
 ## [0.4.1] — 2026-10-01
 
 Discord alerts, reworked for readability right after shipping 0.4.0 — the plain-text version looked like a wall of text next to a real outage's worth of reminders.

@@ -1,10 +1,15 @@
 package admin
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/tarkiman/claude-whatsapp/internal/config"
+	"github.com/tarkiman/claude-whatsapp/internal/pending"
 )
 
 func mustNets(t *testing.T, cidrs ...string) []*net.IPNet {
@@ -91,9 +96,54 @@ func TestVerdict(t *testing.T) {
 		t.Errorf("claude logged out: got %q, want down", got)
 	}
 
-	backlog := healthy
-	backlog.Bridge.Pending = 2
-	if got, _ := verdict(backlog); got != "degraded" {
-		t.Errorf("pending backlog: got %q, want degraded", got)
+	// A message that's only briefly in the durability queue is normal —
+	// claude -p can legitimately take several minutes — so it must not flip
+	// the dashboard to degraded or fire a Discord alert.
+	freshPending := healthy
+	freshPending.Bridge.Pending = 1
+	freshPending.Bridge.pendingOldestAge = 2 * time.Minute
+	if got, _ := verdict(freshPending); got != "ok" {
+		t.Errorf("fresh pending message: got %q, want ok", got)
+	}
+
+	// Only once it's been stuck well past any legitimate reply time is it a
+	// real problem.
+	stuckPending := healthy
+	stuckPending.Bridge.Pending = 2
+	stuckPending.Bridge.pendingOldestAge = 30 * time.Minute
+	if got, _ := verdict(stuckPending); got != "degraded" {
+		t.Errorf("stuck pending backlog: got %q, want degraded", got)
+	}
+}
+
+// TestBridgeInfoTracksOldestPendingAge confirms bridgeInfo() reads the real
+// age of the oldest file in the pending queue (via internal/pending), not
+// just a raw file count — that age is what verdict() uses to tell "a message
+// claude is still working on" apart from "something is actually stuck".
+func TestBridgeInfoTracksOldestPendingAge(t *testing.T) {
+	dir := t.TempDir()
+	pst, err := pending.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := pending.Message{MessageID: "old", ChatID: "c", From: "f", ReceivedAt: time.Now().Add(-30 * time.Minute)}
+	fresh := pending.Message{MessageID: "fresh", ChatID: "c", From: "f", ReceivedAt: time.Now().Add(-2 * time.Minute)}
+	if err := pst.Write(old); err != nil {
+		t.Fatal(err)
+	}
+	if err := pst.Write(fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Server{cfg: &config.Config{PendingDir: dir}}
+	b := s.bridgeInfo(context.Background())
+	if b.Pending != 2 {
+		t.Fatalf("Pending = %d, want 2", b.Pending)
+	}
+	if b.pendingOldestAge < 29*time.Minute || b.pendingOldestAge > 31*time.Minute {
+		t.Fatalf("pendingOldestAge = %v, want ~30m", b.pendingOldestAge)
+	}
+	if b.PendingOldestFor != "30m" {
+		t.Errorf("PendingOldestFor = %q, want 30m", b.PendingOldestFor)
 	}
 }
