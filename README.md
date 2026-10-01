@@ -160,6 +160,8 @@ The page is behind its own login: **one account**, username and password chosen 
 
 The **Discord alerts** card sends a message to a Discord channel when the overall status above changes — `ok → degraded/down` and back to `ok` — so a problem like WhatsApp disconnecting (the kind of thing nobody notices until they try to use the bot) gets noticed. While a problem continues, a reminder repeats every 30 minutes; nothing is sent for ordinary polling when nothing changed.
 
+A message Claude is still working on (the pending queue shown in Status) is not treated as a problem by itself — replies can legitimately take several minutes — so neither the dashboard nor an alert turns it into "degraded" until it has been stuck for more than 25 minutes.
+
 1. In Discord: the channel's *Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL*.
 2. Paste it into the card, tick **Enabled**, and **Save**. Use **Send test alert** to confirm it actually works before relying on it.
 
