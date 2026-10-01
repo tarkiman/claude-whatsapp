@@ -58,7 +58,7 @@ Jalankan sebagai **user biasa, bukan `sudo`**:
 curl -sSL https://raw.githubusercontent.com/tarkiman/claude-whatsapp/main/scripts/quick-install.sh | bash
 ```
 
-Installer mengunduh rilis siap pakai dan lebih dulu **memeriksa semua prasyarat** — kalau ada yang kurang, semuanya didaftar sekaligus beserta cara memperbaikinya, dan tidak ada yang diubah. Setelah itu ia menanyakan **nomor pengirim** Anda (nomor HP Anda dengan kode negara, tanpa 0 di depan — mis. `6281234567890`) dan **username serta password halaman admin** (diketik tanpa tampil di layar; minimal 10 karakter dengan minimal 5 karakter berbeda — frasa pendek dari kata-kata yang tidak berhubungan sudah cukup), membuat `.env` dengan secret acak, menjalankan gowa via Docker Compose, dan memasang service bridge + admin. Semuanya masuk ke `~/claude-whatsapp`.
+Installer **memeriksa semua prasyarat sebelum mengunduh apa pun** — kalau ada yang kurang, semuanya didaftar sekaligus beserta cara memperbaikinya, dan tidak ada yang diubah. Setelah lolos, barulah ia mengunduh rilis siap pakai, menanyakan **nomor pengirim** Anda (nomor HP Anda dengan kode negara, tanpa 0 di depan — mis. `6281234567890`) dan **username serta password halaman admin** (diketik tanpa tampil di layar; minimal 10 karakter dengan minimal 5 karakter berbeda — frasa pendek dari kata-kata yang tidak berhubungan sudah cukup), membuat `.env` dengan secret acak, menjalankan gowa via Docker Compose, dan memasang service bridge + admin. Semuanya masuk ke `~/claude-whatsapp`.
 
 <details>
 <summary>Opsi installer</summary>

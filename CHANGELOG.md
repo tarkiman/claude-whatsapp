@@ -2,6 +2,14 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.4.3] — 2026-10-02
+
+Reported confusing on a real install on a new set-top box: the installer downloaded the full release, printed an "Upgrade" message, and only then failed on a missing Claude CLI — wasting bandwidth and showing an "Upgrade" line right before a failure whose own message claimed "nothing was changed".
+
+### Changed
+
+- `quick-install.sh` now checks every prerequisite (Docker, the Compose plugin, Docker daemon access, the `claude` CLI, systemd) **before downloading the release tarball at all**, using the exact same checklist as `install.sh` (now shared from `scripts/preflight.sh`). A missing prerequisite is reported immediately, with nothing downloaded and nothing changed — matching what the message has always said. If the check can't be fetched ahead of time (an older pinned release, or a transient network hiccup), it's skipped silently and `install.sh`'s own check after extraction still catches it, exactly as before.
+
 ## [0.4.2] — 2026-10-02
 
 Fixed right after a user asked whether a recurring "degraded" Discord alert ("1 message(s) waiting in the pending queue") was safe — it was, but the check behind it wasn't looking at how long the message had actually been there.
