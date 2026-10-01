@@ -268,6 +268,11 @@ function row(label, value, dot) {
 }
 function fill(el, rows) { el.replaceChildren(...rows); }
 const yes = (b) => (b ? 'ok' : 'bad');
+// Mirrors internal/admin's pendingStuckThreshold: a message only sitting in
+// the durability queue for a few minutes is normal (claude -p is still
+// working on it), so the row stays green until it's been stuck far longer
+// than any legitimate reply should take.
+const pendingStuckThresholdSeconds = 25 * 60;
 
 let deviceId = '';
 let logSource = 'bridge';
@@ -289,7 +294,8 @@ function render(s) {
     row('/health', b.healthOk ? 'ok' : (b.healthErr ? 'unreachable' : 'failing'), yes(b.healthOk)),
     row('Since', b.since || '—'),
     row('Chats', b.chats),
-    row('Pending queue', b.pending, b.pending ? 'warn' : 'ok'),
+    row('Pending queue', b.pending ? `${b.pending} (oldest ${b.pendingOldestFor || '—'})` : 0,
+      b.pendingOldestSeconds >= pendingStuckThresholdSeconds ? 'warn' : 'ok'),
   ]);
 
   const w = s.whatsapp;

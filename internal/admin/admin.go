@@ -27,6 +27,7 @@ import (
 	"github.com/tarkiman/claude-whatsapp/internal/alerts"
 	"github.com/tarkiman/claude-whatsapp/internal/config"
 	"github.com/tarkiman/claude-whatsapp/internal/gowa"
+	"github.com/tarkiman/claude-whatsapp/internal/pending"
 )
 
 //go:embed web
@@ -39,6 +40,13 @@ const (
 	adminHeader   = "X-Admin-Request"
 	cmdTimeout    = 10 * time.Second
 	logLinesShown = 40
+
+	// pendingStuckThreshold is how long the oldest pending message must have
+	// been in flight before it's treated as a real problem rather than normal
+	// processing. claude.Runner allows up to a 10-minute reply, retried once
+	// without --resume on failure, so ~20 minutes is the legitimate worst
+	// case; this adds a safety margin above that.
+	pendingStuckThreshold = 25 * time.Minute
 )
 
 var watchedContainers = []string{"claude-whatsapp-gowa", "claude-whatsapp-gowa-media-perms-fix"}
@@ -246,6 +254,15 @@ type BridgeInfo struct {
 	Pending   int    `json:"pending"`
 	Chats     int    `json:"chats"`
 	HealthErr string `json:"healthErr,omitempty"`
+
+	// PendingOldestFor is how long the oldest pending message has been in
+	// flight, formatted for display (empty when nothing is pending). The
+	// queue itself is normal, by-design behavior — see pendingStuckThreshold
+	// — so this alone is not a problem; pendingOldestAge is what verdict()
+	// actually acts on.
+	PendingOldestFor     string  `json:"pendingOldestFor,omitempty"`
+	PendingOldestSeconds float64 `json:"pendingOldestSeconds,omitempty"`
+	pendingOldestAge     time.Duration
 }
 
 type WAInfo struct {
@@ -328,8 +345,8 @@ func verdict(r StatusResponse) (string, []string) {
 	if !r.Claude.LoggedIn {
 		down = append(down, "Claude CLI is not logged in — the bridge cannot answer")
 	}
-	if r.Bridge.Pending > 0 {
-		warn = append(warn, fmt.Sprintf("%d message(s) waiting in the pending queue", r.Bridge.Pending))
+	if r.Bridge.pendingOldestAge >= pendingStuckThreshold {
+		warn = append(warn, fmt.Sprintf("%d message(s) stuck in the pending queue for %s — longer than a normal reply should ever take", r.Bridge.Pending, alerts.FormatDuration(r.Bridge.pendingOldestAge)))
 	}
 
 	switch {
@@ -367,10 +384,19 @@ func (s *Server) bridgeInfo(ctx context.Context) BridgeInfo {
 		b.HealthOK = resp.StatusCode == http.StatusOK
 	}
 
-	if entries, err := os.ReadDir(s.cfg.PendingDir); err == nil {
-		for _, e := range entries {
-			if !e.IsDir() {
-				b.Pending++
+	if pst, err := pending.Open(s.cfg.PendingDir); err == nil {
+		if msgs, err := pst.ListAll(); err == nil {
+			b.Pending = len(msgs)
+			var oldest time.Time
+			for _, m := range msgs {
+				if oldest.IsZero() || m.ReceivedAt.Before(oldest) {
+					oldest = m.ReceivedAt
+				}
+			}
+			if !oldest.IsZero() {
+				b.pendingOldestAge = time.Since(oldest)
+				b.PendingOldestFor = alerts.FormatDuration(b.pendingOldestAge)
+				b.PendingOldestSeconds = b.pendingOldestAge.Seconds()
 			}
 		}
 	}
