@@ -20,19 +20,19 @@ const validHook = "https://discord.com/api/webhooks/123456789012345678/AbCdEfGhI
 // internal/alerts' real host validation is exercised unmodified — while the
 // actual HTTP request lands on this local server.
 type fakeDiscordServer struct {
-	mu     sync.Mutex
-	bodies []string
-	srv    *httptest.Server
+	mu       sync.Mutex
+	payloads []alerts.WebhookPayload
+	srv      *httptest.Server
 }
 
 func newFakeDiscordServer(t *testing.T) *fakeDiscordServer {
 	t.Helper()
 	f := &fakeDiscordServer{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]string
+		var body alerts.WebhookPayload
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.mu.Lock()
-		f.bodies = append(f.bodies, body["content"])
+		f.payloads = append(f.payloads, body)
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -40,10 +40,20 @@ func newFakeDiscordServer(t *testing.T) *fakeDiscordServer {
 	return f
 }
 
-func (f *fakeDiscordServer) messages() []string {
+func (f *fakeDiscordServer) sent() []alerts.WebhookPayload {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]string(nil), f.bodies...)
+	return append([]alerts.WebhookPayload(nil), f.payloads...)
+}
+
+// messages returns each payload's Content line, for tests that only care
+// about the short push-notification text.
+func (f *fakeDiscordServer) messages() []string {
+	out := make([]string, 0)
+	for _, p := range f.sent() {
+		out = append(out, p.Content)
+	}
+	return out
 }
 
 // redirectClient returns an *http.Client that sends every request to target
@@ -168,17 +178,29 @@ func TestAlertCycleFeedsRealStatusIntoTheMonitor(t *testing.T) {
 	}
 
 	a.s.alertCycle(context.Background())
-	got := d.messages()
+	got := d.sent()
 	if len(got) != 1 {
-		t.Fatalf("messages = %v, want exactly 1", got)
+		t.Fatalf("payloads = %v, want exactly 1", got)
 	}
-	if !strings.Contains(got[0], "down") && !strings.Contains(got[0], "degraded") {
-		t.Errorf("a freshly-created server with no WhatsApp device should not read as healthy: %q", got[0])
+	if !strings.Contains(got[0].Content, "down") && !strings.Contains(got[0].Content, "degraded") {
+		t.Errorf("a freshly-created server with no WhatsApp device should not read as healthy: %q", got[0].Content)
+	}
+	if len(got[0].Embeds) != 1 {
+		t.Fatalf("expected one embed, got %+v", got[0])
+	}
+	names := map[string]bool{}
+	for _, f := range got[0].Embeds[0].Fields {
+		names[f.Name] = true
+	}
+	for _, want := range []string{"🌉 Bridge", "📱 WhatsApp", "🤖 Claude"} {
+		if !names[want] {
+			t.Errorf("embed is missing the %s component field: %+v", want, got[0].Embeds[0].Fields)
+		}
 	}
 
 	// A second cycle with nothing changed must not repeat the alert.
 	a.s.alertCycle(context.Background())
-	if got := d.messages(); len(got) != 1 {
+	if got := d.sent(); len(got) != 1 {
 		t.Fatalf("second cycle sent again: %v", got)
 	}
 }

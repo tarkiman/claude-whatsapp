@@ -165,6 +165,10 @@ The **Discord alerts** card sends a message to a Discord channel when the overal
 
 ![Discord alerts card](docs/images/discord-alerts.png)
 
+Each alert is a proper Discord embed, not a wall of plain text: color-coded (red/yellow/green for down/degraded/ok), a line per component (bridge, WhatsApp, Claude) so you can tell what broke without opening the Admin UI, the specific reasons when something is wrong, and — on recovery or on the 30-minute reminder — the real elapsed time (`9h 7m`, not just "still down").
+
+![Example of a down alert followed by a recovery alert (mockup built from real payload data — never actually sent to Discord)](docs/images/discord-alert-example.png)
+
 The webhook URL is saved only as `~/.claude-whatsapp/alerts.json` (mode `0600`) — never in `.env`, never shown back in full once saved (the page only ever displays a masked form) — because anyone holding it can post into that Discord channel. Checks run once a minute, from the admin process itself, so alerting keeps working even while the bridge is the thing that is down.
 
 ### Access from another computer
