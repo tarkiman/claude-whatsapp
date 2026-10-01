@@ -11,6 +11,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -70,6 +71,7 @@ func main() {
 		AllowedHosts: hosts,
 	})
 
+	go srv.RunAlertLoop(context.Background())
 	for _, a := range addrs {
 		go serve(a, srv.Handler())
 	}

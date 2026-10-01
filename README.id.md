@@ -141,6 +141,7 @@ Halaman status dan pemulihan di `http://127.0.0.1:8098`, berjalan sebagai servic
 - **WhatsApp recovery** — Reconnect (coba ini dulu kalau status disconnected), pairing QR, pairing lewat kode, dan **Unlink** untuk pindah ke nomor bot lain.
 - **Sign in / switch Claude account** — login atau ganti akun tanpa membuka terminal.
 - **Login admin** — username dan password (hanya hash yang disimpan), keluar, dan ganti password dari halaman; lihat [di bawah](#login-admin).
+- **Alert Discord** — diberi tahu kalau ada yang rusak (lihat [di bawah](#alert-discord)).
 
 Status `Down` + "WhatsApp is logged out" berarti sesi WhatsApp dihapus (mis. device di-unlink dari HP, atau HP utama offline terlalu lama). Bot tidak membalas apa pun sampai ditautkan ulang — dan tidak ada alarm lain yang berbunyi, jadi sesekali cek halaman ini.
 
@@ -154,6 +155,17 @@ Halaman ini berada di balik login sendiri: **satu akun**, username dan password 
 - **Lupa password?** Di mesin itu sendiri jalankan `~/claude-whatsapp/bin/admin passwd` (atau `bin/admin passwd` di checkout source). Perintah ini hanya bisa dijalankan di sana, oleh user yang memang sudah bisa membaca filenya, jadi tidak butuh login. Dengan `--user` Anda juga bisa mengganti nama akun.
 - **Belum ada akun** (misalnya setelah instalasi manual atau upgrade dari v0.1.x): halaman login menawarkan *Create the admin login* — **hanya untuk browser di mesin itu sendiri**. Dari tempat lain (LAN, ZeroTier) halamannya hanya meminta Anda melakukannya secara lokal atau menjalankan `bin/admin passwd`, sehingga tidak ada orang lain yang bisa mengklaimnya lebih dulu.
 - Ini tetap HTTP biasa di LAN: password bisa dibaca orang lain di jaringan yang sama, dan cookie tidak bisa diberi flag `Secure`. Pilih ZeroTier (terenkripsi) atau SSH tunnel, atau pasang TLS di depannya; jangan pernah membuka halaman ini ke internet.
+
+### Alert Discord
+
+Kartu **Discord alerts** mengirim pesan ke channel Discord saat status keseluruhan di atas berubah — `ok → degraded/down` dan kembali ke `ok` — jadi masalah seperti WhatsApp terputus (hal yang biasanya baru disadari setelah seseorang mencoba memakai bot) langsung ketahuan. Selama masalah berlanjut, pengingat berulang tiap 30 menit; tidak ada yang dikirim untuk pengecekan biasa kalau tidak ada perubahan.
+
+1. Di Discord: channel-nya *Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL*.
+2. Tempel di kartu itu, centang **Enabled**, lalu **Save**. Pakai **Send test alert** untuk memastikan benar-benar jalan sebelum diandalkan.
+
+![Kartu alert Discord](docs/images/discord-alerts.png)
+
+URL webhook hanya disimpan di `~/.claude-whatsapp/alerts.json` (mode `0600`) — tidak pernah di `.env`, tidak pernah ditampilkan utuh lagi setelah disimpan (halaman hanya menampilkan bentuk tersamar) — karena siapa pun yang memegangnya bisa memposting ke channel Discord itu. Pengecekan jalan tiap satu menit, dari proses admin itu sendiri, jadi alert tetap bekerja walau yang sedang mati justru bridge-nya.
 
 ### Akses dari komputer lain
 
@@ -187,6 +199,7 @@ Semua lewat `.env` di direktori instalasi (`chmod 600`; template lengkap dengan 
 | `WORK_DIR` | Direktori kerja `claude -p` (default `$HOME`; di sinilah `CLAUDE.md` Anda terbaca). |
 | `ADMIN_ADDR`, `ADMIN_ALLOWED_NETS` | Di mana Admin UI mendengarkan dan jaringan klien mana yang boleh menjangkaunya — lihat [di atas](#akses-dari-komputer-lain). |
 | `ADMIN_AUTH_FILE` | Tempat login admin disimpan (default `~/.claude-whatsapp/admin.json`). |
+| `ALERTS_FILE` | Tempat pengaturan alert Discord disimpan (default `~/.claude-whatsapp/alerts.json`). |
 | `ADMIN_PASSWORD`, `ADMIN_USER` | **Hanya bootstrap lama:** kalau belum ada file login, password ini di-hash menjadi file itu pada start pertama (user `ADMIN_USER`, default `admin`); setelahnya diabaikan — hapus dari `.env`. |
 
 Untuk mengubah `.env`: edit lalu `systemctl --user restart claude-whatsapp.service claude-whatsapp-admin.service` (dan `docker compose up -d` di direktori instalasi kalau yang diubah menyangkut gowa).
@@ -272,6 +285,7 @@ Mulai dari [Admin UI](#admin-ui): status, alasan, dan log biasanya sudah menunju
 
 | Gejala | Kemungkinan penyebab | Cek |
 |---|---|---|
+| Alert Discord tidak pernah muncul | Alert mati, webhook salah tempel, atau webhook-nya sudah dihapus di Discord | *Send test alert* di kartu itu — 400/502 menjelaskan sebabnya |
 | Tidak bisa masuk ke Admin UI | Username atau password salah; *too many attempts* berarti terkunci sementara (tunggu, atau reset password di mesin) | Di mesin itu sendiri: `bin/admin passwd`. Mulai v0.2.0, `ADMIN_PASSWORD` lama dari `.env` adalah passwordnya sampai Anda menggantinya |
 | Halaman admin bilang pembuatan login hanya bisa di mesin | Belum ada akun dan Anda tidak membuka dari mesin itu sendiri | Buka `http://127.0.0.1:8098` di sana, atau jalankan `bin/admin passwd` |
 | Bot tidak menanggapi @mention saya di grup | Bukan mode tim, pengirim belum dicentang di roster, grupnya bukan yang dipilih, atau teksnya bukan @mention sungguhan ke bot | Admin UI → *Who can instruct the bot*; set `LOG_GROUP_MESSAGES=1` dan baca baris log `group-message:` |
@@ -295,7 +309,7 @@ Mulai dari [Admin UI](#admin-ui): status, alasan, dan log biasanya sudah menunju
 - **Durability** — pesan ditulis ke antrian on-disk (`~/.claude-whatsapp/pending/`) sebelum di-ack ke gowa, dan direplay otomatis kalau bridge sempat mati di tengah proses.
 - **Satu `claude -p` per chat pada satu waktu** — dikunci per `chat_id`; pesan lain untuk chat yang sama antre, bukan berebut sesi `--resume` yang sama.
 - **Mode personal dan tim** — satu nomor di DM, atau satu grup dengan roster yang disetujui dan @mention wajib; diatur dari Admin UI dan berlaku tanpa restart ([di atas](#siapa-yang-boleh-memerintah-bot)).
-- **Admin UI** — status, pemulihan WhatsApp, login Claude, dan kontrol akses, di balik login sendiri ([di atas](#admin-ui)).
+- **Admin UI** — status, pemulihan WhatsApp, login Claude, kontrol akses, dan alert Discord, di balik login sendiri ([di atas](#admin-ui)).
 
 **Belum diimplementasikan:** approval tool-call lewat reaction emoji, dan rate limiting lintas-chat (tiap chat berbeda = proses `claude -p` sendiri, tanpa batas jumlah paralel). Kontribusi/PR dipersilakan.
 
@@ -308,6 +322,7 @@ claude-whatsapp/
 ├── internal/
 │   ├── admin/                       # handler Admin UI + web/index.html (di-embed)
 │   ├── adminauth/                   # login admin: hash password, sesi, pembatas tebakan
+│   ├── alerts/                      # alert Discord: penyimpanan webhook, deteksi perubahan status
 │   ├── access/                      # siapa yang boleh memerintah bot: kebijakan personal/tim, roster, deteksi mention
 │   ├── config/                      # baca & validasi .env
 │   ├── gowa/                        # REST client ke gowa

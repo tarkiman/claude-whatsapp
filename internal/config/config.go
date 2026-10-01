@@ -35,6 +35,9 @@ type Config struct {
 	// Where the Admin UI keeps its login (username + password hash, 0600).
 	AdminAuthFile string
 
+	// Where the Discord alert configuration (webhook URL, on/off) is stored.
+	AlertsFile string
+
 	// LOG_GROUP_MESSAGES=1 logs sender, ids and text of group messages (with
 	// the decision taken) to help diagnose @mention detection. Off by default
 	// because it writes message content to the log.
@@ -88,6 +91,7 @@ func FromEnv() (*Config, error) {
 		SessionStorePath: getEnv("SESSION_STORE_PATH", home+"/.claude-whatsapp/sessions.json"),
 		AccessFile:       getEnv("ACCESS_FILE", home+"/.claude-whatsapp/access.json"),
 		AdminAuthFile:    getEnv("ADMIN_AUTH_FILE", home+"/.claude-whatsapp/admin.json"),
+		AlertsFile:       getEnv("ALERTS_FILE", home+"/.claude-whatsapp/alerts.json"),
 		LogGroupMessages: os.Getenv("LOG_GROUP_MESSAGES") == "1",
 		PendingDir:       getEnv("PENDING_DIR", home+"/.claude-whatsapp/pending"),
 		MediaDir:         getEnv("GOWA_MEDIA_DIR", "./data/statics"),

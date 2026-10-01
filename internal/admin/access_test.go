@@ -52,7 +52,7 @@ func newAccessRig(t *testing.T, legacySenders ...string) *accessRig {
 
 	dir := t.TempDir()
 	file := filepath.Join(dir, "access.json")
-	cfg := &config.Config{AccessFile: file, AdminAuthFile: filepath.Join(dir, "admin.json"), AllowedSenders: legacySenders}
+	cfg := &config.Config{AccessFile: file, AdminAuthFile: filepath.Join(dir, "admin.json"), AlertsFile: filepath.Join(dir, "alerts.json"), AllowedSenders: legacySenders}
 	srv := New(cfg, gowa.New(gw.URL, "", ""), Options{KDFIterations: 1000})
 	return &accessRig{t: t, s: srv, file: file, cookie: signIn(t, srv)}
 }

@@ -141,6 +141,7 @@ A status and recovery page at `http://127.0.0.1:8098`, run as its own service (`
 - **WhatsApp recovery** — Reconnect (try this first when status says disconnected), pairing by QR, pairing by code, and **Unlink** to move to a different bot number.
 - **Sign in / switch Claude account** — sign in or change accounts without opening a terminal.
 - **Admin login** — username and password (only a hash is stored), log out, and change the password from the page; see [below](#admin-login).
+- **Discord alerts** — get pinged when something breaks (see [below](#discord-alerts)).
 
 `Down` + "WhatsApp is logged out" means the WhatsApp session was deleted (for example the device was unlinked from the phone, or the main phone was offline for too long). The bot answers nothing until it is linked again — and no other alarm goes off, so check this page from time to time.
 
@@ -154,6 +155,17 @@ The page is behind its own login: **one account**, username and password chosen 
 - **Forgot the password?** On the machine itself run `~/claude-whatsapp/bin/admin passwd` (or `bin/admin passwd` in a source checkout). It can only be run there, by a user who can already read the file, so it needs no login. It also lets you rename the account with `--user`.
 - **No account yet** (for example after a manual install or an upgrade from v0.1.x): the login page offers *Create the admin login* — **only to a browser on the machine itself**. From anywhere else (LAN, ZeroTier, SSH tunnel excepted) the page just tells you to do it locally or run `bin/admin passwd`, so nobody else can claim it first.
 - This is still plain HTTP on a LAN: the password can be read by others on the same network, and the cookie cannot be marked `Secure`. Prefer ZeroTier (encrypted) or an SSH tunnel, or put TLS in front; never expose the page to the internet.
+
+### Discord alerts
+
+The **Discord alerts** card sends a message to a Discord channel when the overall status above changes — `ok → degraded/down` and back to `ok` — so a problem like WhatsApp disconnecting (the kind of thing nobody notices until they try to use the bot) gets noticed. While a problem continues, a reminder repeats every 30 minutes; nothing is sent for ordinary polling when nothing changed.
+
+1. In Discord: the channel's *Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL*.
+2. Paste it into the card, tick **Enabled**, and **Save**. Use **Send test alert** to confirm it actually works before relying on it.
+
+![Discord alerts card](docs/images/discord-alerts.png)
+
+The webhook URL is saved only as `~/.claude-whatsapp/alerts.json` (mode `0600`) — never in `.env`, never shown back in full once saved (the page only ever displays a masked form) — because anyone holding it can post into that Discord channel. Checks run once a minute, from the admin process itself, so alerting keeps working even while the bridge is the thing that is down.
 
 ### Access from another computer
 
@@ -187,6 +199,7 @@ Everything lives in `.env` in the install directory (`chmod 600`; fully commente
 | `WORK_DIR` | Working directory of `claude -p` (default `$HOME`; this is where your `CLAUDE.md` is picked up). |
 | `ADMIN_ADDR`, `ADMIN_ALLOWED_NETS` | Where the Admin UI listens and which client networks may reach it — see [above](#access-from-another-computer). |
 | `ADMIN_AUTH_FILE` | Where the admin login is stored (default `~/.claude-whatsapp/admin.json`). |
+| `ALERTS_FILE` | Where the Discord alert setup is stored (default `~/.claude-whatsapp/alerts.json`). |
 | `ADMIN_PASSWORD`, `ADMIN_USER` | **Legacy bootstrap only:** if no login file exists, this password is hashed into one on the first start (user `ADMIN_USER`, default `admin`); afterwards it is ignored — remove it from `.env`. |
 
 To change `.env`: edit it, then `systemctl --user restart claude-whatsapp.service claude-whatsapp-admin.service` (plus `docker compose up -d` in the install directory if you changed anything gowa-related).
@@ -272,6 +285,7 @@ Start with the [Admin UI](#admin-ui): the status, the reasons and the logs usual
 
 | Symptom | Likely cause | Check |
 |---|---|---|
+| Discord alerts never arrive | Alerts disabled, webhook pasted wrong, or the webhook was deleted in Discord | *Send test alert* in the card — a 400/502 explains why |
 | I can't sign in to the Admin UI | Wrong username or password; *too many attempts* means a temporary lockout (wait, or reset the password on the machine) | On the machine itself: `bin/admin passwd`. From v0.2.0 the old `ADMIN_PASSWORD` from `.env` is the password until you change it |
 | The admin page says login setup is only possible on the machine | No account exists yet and you are not browsing from the machine itself | Open `http://127.0.0.1:8098` there, or run `bin/admin passwd` |
 | Bot ignores my @mention in the group | Not in team mode, the sender isn't ticked in the roster, the group isn't the selected one, or the text isn't a real @mention of the bot | Admin UI → *Who can instruct the bot*; set `LOG_GROUP_MESSAGES=1` and read the `group-message:` log line |
@@ -295,7 +309,7 @@ Start with the [Admin UI](#admin-ui): the status, the reasons and the logs usual
 - **Durability** — messages are written to an on-disk queue (`~/.claude-whatsapp/pending/`) before being acked to gowa and replayed automatically if the bridge died mid-flight.
 - **One `claude -p` per chat at a time** — locked per `chat_id`; further messages for the same chat queue instead of fighting over the same `--resume` session.
 - **Personal and team modes** — one number in DMs, or one group with an approved roster and required @mention; managed from the Admin UI and applied without a restart ([above](#who-can-instruct-the-bot)).
-- **Admin UI** — status, WhatsApp recovery, Claude sign-in and access control, behind its own login ([above](#admin-ui)).
+- **Admin UI** — status, WhatsApp recovery, Claude sign-in, access control and Discord alerts, behind its own login ([above](#admin-ui)).
 
 **Not implemented yet:** tool-call approval via emoji reaction, and cross-chat rate limiting (every different chat is its own `claude -p` process, with no cap on how many run in parallel). Contributions and PRs welcome.
 
@@ -308,6 +322,7 @@ claude-whatsapp/
 ├── internal/
 │   ├── admin/                       # Admin UI handlers + web/index.html (embedded)
 │   ├── adminauth/                   # admin login: password hash, sessions, guess limiter
+│   ├── alerts/                      # Discord alerts: webhook storage, status-change detection
 │   ├── access/                      # who may instruct the bot: personal/team policy, roster, mention detection
 │   ├── config/                      # read & validate .env
 │   ├── gowa/                        # REST client for gowa
