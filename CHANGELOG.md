@@ -2,6 +2,16 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.4.0] — 2026-10-01
+
+Built after a real outage (Docker's DNS couldn't reach `8.8.8.8`/`1.1.1.1`, so gowa lost WhatsApp) went unnoticed until someone asked.
+
+### Added
+
+- **Discord alerts.** A new "Discord alerts" card in the Admin UI sends a Discord message when the overall status changes — `ok -> degraded/down` and back to `ok` — with a reminder every 30 minutes while a problem continues. Checks run once a minute from the admin process itself (not the bridge), using the exact same status computation the dashboard shows, so alerting keeps working even when the bridge is the thing that is down.
+  - *Send test alert* posts immediately, independent of the on/off setting, to confirm a webhook actually works.
+  - The webhook URL is stored only in `~/.claude-whatsapp/alerts.json` (`ALERTS_FILE`, mode `0600`) - never in `.env`, never shown back in full once saved - and is validated to be a real `https://discord.com/api/webhooks/...` (or `discordapp.com`) URL before it is accepted.
+
 ## [0.3.2] — 2026-09-29
 
 Found on the second attempt on the same set-top box: Claude had been installed while logged in as `root`, so the regular user running the installer could not see it.

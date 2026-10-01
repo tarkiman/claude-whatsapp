@@ -24,6 +24,7 @@ import (
 
 	"github.com/tarkiman/claude-whatsapp/internal/access"
 	"github.com/tarkiman/claude-whatsapp/internal/adminauth"
+	"github.com/tarkiman/claude-whatsapp/internal/alerts"
 	"github.com/tarkiman/claude-whatsapp/internal/config"
 	"github.com/tarkiman/claude-whatsapp/internal/gowa"
 )
@@ -62,6 +63,10 @@ type Server struct {
 
 	access *access.Store
 
+	alerts   *alerts.Store
+	alertMon *alerts.Monitor
+	notifier *alerts.Notifier
+
 	creds     *adminauth.Store
 	sessions  *adminauth.Sessions
 	limiter   *adminauth.Limiter
@@ -76,12 +81,16 @@ type Server struct {
 
 func New(cfg *config.Config, g *gowa.Client, opts Options) *Server {
 	legacy, _ := access.Legacy(cfg.AllowedSenders)
+	notifier := alerts.NewNotifier()
 	s := &Server{
 		cfg: cfg, gowa: g, mux: http.NewServeMux(), opts: opts, access: access.Open(cfg.AccessFile, legacy),
 		creds:     adminauth.Open(cfg.AdminAuthFile, opts.KDFIterations),
 		sessions:  adminauth.NewSessions(sessionIdle, sessionMax),
 		limiter:   adminauth.NewLimiter(5, 10*time.Minute, 5*time.Minute),
 		failDelay: 300 * time.Millisecond,
+		alerts:    alerts.Open(cfg.AlertsFile),
+		alertMon:  alerts.NewMonitor(notifier),
+		notifier:  notifier,
 	}
 
 	sub, _ := fs.Sub(webFS, "web")
@@ -101,6 +110,9 @@ func New(cfg *config.Config, g *gowa.Client, opts Options) *Server {
 	s.mux.HandleFunc("POST /api/wa/reconnect", s.handleReconnect)
 	s.mux.HandleFunc("POST /api/wa/logout", s.handleLogout)
 	s.mux.HandleFunc("GET /api/wa/status", s.handleWAStatus)
+	s.mux.HandleFunc("GET /api/alerts", s.handleAlertsGet)
+	s.mux.HandleFunc("POST /api/alerts", s.handleAlertsSave)
+	s.mux.HandleFunc("POST /api/alerts/test", s.handleAlertsTest)
 	s.mux.HandleFunc("GET /api/access", s.handleAccessGet)
 	s.mux.HandleFunc("POST /api/access", s.handleAccessSave)
 	s.mux.HandleFunc("GET /api/access/groups", s.handleAccessGroups)
@@ -271,7 +283,12 @@ type StatusResponse struct {
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	writeJSON(w, http.StatusOK, s.computeStatus(r.Context()))
+}
+
+// computeStatus is the same aggregation the dashboard shows, also used by the
+// alert loop so an alert's wording always matches what the page displays.
+func (s *Server) computeStatus(ctx context.Context) StatusResponse {
 	var resp StatusResponse
 	resp.Time = time.Now()
 
@@ -283,7 +300,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 
 	resp.Overall, resp.Reasons = verdict(resp)
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 func verdict(r StatusResponse) (string, []string) {

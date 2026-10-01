@@ -24,7 +24,7 @@ const (
 func newAuthServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
-	cfg := &config.Config{AccessFile: filepath.Join(dir, "access.json"), AdminAuthFile: filepath.Join(dir, "admin.json"), AllowedSenders: []string{"6281234567890"}}
+	cfg := &config.Config{AccessFile: filepath.Join(dir, "access.json"), AdminAuthFile: filepath.Join(dir, "admin.json"), AlertsFile: filepath.Join(dir, "alerts.json"), AllowedSenders: []string{"6281234567890"}}
 	s := New(cfg, gowa.New("http://127.0.0.1:1", "", ""), Options{
 		KDFIterations: 1000,
 		AllowedNets:   mustNets(t, "192.168.1.0/24"),
