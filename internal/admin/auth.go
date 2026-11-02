@@ -86,6 +86,7 @@ type authStateView struct {
 	SetupAllowed  bool   `json:"setupAllowed"`
 	Authenticated bool   `json:"authenticated"`
 	User          string `json:"user,omitempty"`
+	TOTPEnabled   bool   `json:"totpEnabled,omitempty"`
 	Error         string `json:"error,omitempty"`
 }
 
@@ -101,6 +102,7 @@ func (s *Server) handleAuthState(w http.ResponseWriter, r *http.Request) {
 	}
 	if v.State == "login" && s.sessionOK(r) {
 		v.Authenticated, v.User = true, s.creds.Username()
+		v.TOTPEnabled = s.creds.TOTPEnabled()
 	}
 	writeJSON(w, http.StatusOK, v)
 }
@@ -108,6 +110,7 @@ func (s *Server) handleAuthState(w http.ResponseWriter, r *http.Request) {
 type credsRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	TOTPCode string `json:"totpCode,omitempty"`
 }
 
 // handleSetup creates the very first account. It is only open while no
@@ -139,6 +142,15 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"user": req.Username})
 }
 
+// handleLogin is a one- or two-step login depending on whether 2FA is on.
+// Username+password are verified first and on their own; if that succeeds
+// and 2FA is enabled but no code was sent yet, it responds with
+// totpRequired instead of a session, and the SAME form resubmits
+// username+password+code together — no separate "partially authenticated"
+// server-side state is needed, since the password is simply checked again.
+// A wrong code at that point is rate-limited exactly like a wrong password:
+// by then the caller has already proven they know it, so repeated guessing
+// is the same kind of attack.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if ok, wait := s.limiter.Check(ip); !ok {
@@ -155,6 +167,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(s.failDelay)
 		writeErr(w, http.StatusUnauthorized, errors.New("wrong username or password"))
 		return
+	}
+	if s.creds.TOTPEnabled() {
+		if req.TOTPCode == "" {
+			writeJSON(w, http.StatusOK, map[string]bool{"totpRequired": true})
+			return
+		}
+		if !s.creds.VerifyTOTPCode(req.TOTPCode) {
+			s.limiter.Fail(ip)
+			time.Sleep(s.failDelay)
+			writeErr(w, http.StatusUnauthorized, errors.New("wrong authentication code"))
+			return
+		}
 	}
 	s.limiter.Success(ip)
 	s.startSession(w, r)
@@ -205,4 +229,71 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	s.sessions.RevokeAll()
 	s.startSession(w, r)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "password changed — other browsers were signed out"})
+}
+
+// handleTOTPSetup starts (or restarts) 2FA enrollment: a fresh secret is
+// generated and stored as pending — not yet required at login — until
+// handleTOTPConfirm proves it was captured correctly.
+func (s *Server) handleTOTPSetup(w http.ResponseWriter, r *http.Request) {
+	secret, uri, err := s.creds.BeginTOTPEnrollment()
+	if err != nil {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"secret": secret, "uri": uri})
+}
+
+// handleTOTPConfirm turns 2FA on once the operator's authenticator app
+// proves it has the secret by showing a code that matches.
+func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if ok, wait := s.limiter.Check(ip); !ok {
+		s.tooManyAttempts(w, wait)
+		return
+	}
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := decodeBody(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	if err := s.creds.ConfirmTOTP(req.Code); err != nil {
+		s.limiter.Fail(ip)
+		time.Sleep(s.failDelay)
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	s.limiter.Success(ip)
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "2FA enabled"})
+}
+
+// handleTOTPDisable needs the current password again — same reasoning as
+// handleChangePassword: a stolen session alone must not be able to weaken
+// the account by turning 2FA off.
+func (s *Server) handleTOTPDisable(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if ok, wait := s.limiter.Check(ip); !ok {
+		s.tooManyAttempts(w, wait)
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := decodeBody(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid JSON body"))
+		return
+	}
+	if !s.creds.Verify(s.creds.Username(), req.Password) {
+		s.limiter.Fail(ip)
+		time.Sleep(s.failDelay)
+		writeErr(w, http.StatusUnauthorized, errors.New("the current password is wrong"))
+		return
+	}
+	s.limiter.Success(ip)
+	if err := s.creds.DisableTOTP(); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "2FA disabled"})
 }

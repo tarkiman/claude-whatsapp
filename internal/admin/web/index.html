@@ -232,6 +232,34 @@
     </div>
     <div id="pw-msg"></div>
     <p class="muted" style="margin-bottom:0">Forgot it? On the machine itself run <code>bin/admin passwd</code>.</p>
+
+    <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:12px">
+      <p style="margin:0 0 8px"><b>Two-factor authentication</b> — <span id="totp-status" class="muted">checking…</span></p>
+
+      <div id="totp-off">
+        <button id="btn-totp-start">Enable 2FA</button>
+      </div>
+
+      <div id="totp-setup" hidden>
+        <p class="muted">Scan this with your authenticator app (Google Authenticator, Authy, etc.), or enter the secret manually, then type the 6-digit code it shows.</p>
+        <p>Secret: <code id="totp-secret"></code></p>
+        <p><a id="totp-uri" target="_blank" rel="noopener">Open in an authenticator app</a> (only works when tapped on the same device as the app)</p>
+        <div class="actions">
+          <input id="totp-code" type="text" inputmode="numeric" maxlength="6" placeholder="123456">
+          <button id="btn-totp-confirm">Confirm</button>
+          <button id="btn-totp-cancel" type="button">Cancel</button>
+        </div>
+      </div>
+
+      <div id="totp-on" hidden>
+        <div class="actions">
+          <input id="totp-disable-pw" type="password" autocomplete="current-password" placeholder="current password">
+          <button id="btn-totp-disable">Disable 2FA</button>
+        </div>
+      </div>
+
+      <div id="totp-msg"></div>
+    </div>
   </section>
 
   <section class="card">
@@ -565,9 +593,50 @@ async function loadWhoAmI() {
     const st = await (await fetch('/api/auth/state')).json();
     if (st.authenticated) {
       $('whoami').textContent = 'signed in as ' + st.user; $('acct-user').textContent = st.user; $('btn-signout').hidden = false;
+      renderTOTP(!!st.totpEnabled);
     }
   } catch (_) { /* the page still works without the label */ }
 }
+
+// --- Two-factor authentication (TOTP) ---
+const tmsg = (t, k) => { const m = $('totp-msg'); m.textContent = t; m.className = k || ''; };
+function renderTOTP(enabled) {
+  $('totp-status').textContent = enabled ? 'on' : 'off';
+  $('totp-off').hidden = enabled;
+  $('totp-on').hidden = !enabled;
+  $('totp-setup').hidden = true;
+}
+$('btn-totp-start').onclick = async (e) => {
+  tmsg(''); e.target.disabled = true;
+  try {
+    const r = await post('/api/auth/totp/setup');
+    $('totp-secret').textContent = r.secret;
+    $('totp-uri').href = r.uri;
+    $('totp-setup').hidden = false; $('totp-off').hidden = true;
+    $('totp-code').value = ''; $('totp-code').focus();
+  } catch (err) { tmsg(err.message, 'err'); }
+  finally { e.target.disabled = false; }
+};
+$('btn-totp-cancel').onclick = () => { $('totp-setup').hidden = true; $('totp-off').hidden = false; tmsg(''); };
+$('btn-totp-confirm').onclick = async (e) => {
+  tmsg(''); e.target.disabled = true;
+  try {
+    await post('/api/auth/totp/confirm', { code: $('totp-code').value.trim() });
+    tmsg('2FA enabled.', 'okmsg');
+    renderTOTP(true);
+  } catch (err) { tmsg(err.message, 'err'); }
+  finally { e.target.disabled = false; }
+};
+$('btn-totp-disable').onclick = async (e) => {
+  tmsg(''); e.target.disabled = true;
+  try {
+    await post('/api/auth/totp/disable', { password: $('totp-disable-pw').value });
+    $('totp-disable-pw').value = '';
+    tmsg('2FA disabled.', 'okmsg');
+    renderTOTP(false);
+  } catch (err) { tmsg(err.message, 'err'); }
+  finally { e.target.disabled = false; }
+};
 $('btn-signout').onclick = async () => { await post('/api/logout').catch(() => {}); location.href = '/login'; };
 $('btn-pw').onclick = async (e) => {
   pmsg('');

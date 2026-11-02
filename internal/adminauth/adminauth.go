@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/tarkiman/claude-whatsapp/internal/totp"
 )
 
 const (
@@ -35,17 +37,26 @@ const (
 	MaxPasswordLen = 200
 	minUsernameLen = 3
 	maxUsernameLen = 32
+
+	// totpIssuer is the "issuer" shown by authenticator apps next to the
+	// account name — purely cosmetic, identifies which service a code is for.
+	totpIssuer = "claude-whatsapp"
 )
 
-// Credentials is what is stored on disk. There is no plaintext anywhere.
+// Credentials is what is stored on disk. There is no plaintext anywhere —
+// TOTPSecret is the one exception, held in the clear like any TOTP shared
+// secret must be (it has to be re-derived from, not just compared against),
+// which is why this file is 0600 and never served back over the API.
 type Credentials struct {
-	Version    int    `json:"version"`
-	Username   string `json:"username"`
-	Algo       string `json:"algo"`
-	Iterations int    `json:"iterations"`
-	Salt       string `json:"salt"` // base64
-	Hash       string `json:"hash"` // base64
-	UpdatedAt  string `json:"updatedAt"`
+	Version     int    `json:"version"`
+	Username    string `json:"username"`
+	Algo        string `json:"algo"`
+	Iterations  int    `json:"iterations"`
+	Salt        string `json:"salt"` // base64
+	Hash        string `json:"hash"` // base64
+	TOTPSecret  string `json:"totpSecret,omitempty"`
+	TOTPEnabled bool   `json:"totpEnabled,omitempty"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 // ValidateUsername accepts 3–32 characters of letters, digits, '.', '_' and '-'.
@@ -109,12 +120,13 @@ type Store struct {
 	path       string
 	iterations int
 
-	mu     sync.Mutex
-	cached Credentials
-	have   bool
-	err    error
-	mtime  time.Time
-	loaded bool
+	mu           sync.Mutex
+	cached       Credentials
+	have         bool
+	err          error
+	mtime        time.Time
+	loaded       bool
+	totpLastStep int64 // highest TOTP step accepted so far — replay protection, in-memory only
 }
 
 // Open returns a Store for path. iterations <= 0 selects DefaultIterations
@@ -223,6 +235,8 @@ func (s *Store) Set(username, password string) error {
 	return s.write(username, password)
 }
 
+// write sets the username/password, carrying over whatever TOTP state
+// already exists (changing a password must never silently turn 2FA off).
 func (s *Store) write(username, password string) error {
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
@@ -232,11 +246,22 @@ func (s *Store) write(username, password string) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.refreshLocked()
+	totpSecret, totpEnabled := s.cached.TOTPSecret, s.cached.TOTPEnabled
+	s.mu.Unlock()
 	c := Credentials{
 		Version: 1, Username: username, Algo: algo, Iterations: s.iterations,
 		Salt: base64.StdEncoding.EncodeToString(salt), Hash: base64.StdEncoding.EncodeToString(key),
+		TOTPSecret: totpSecret, TOTPEnabled: totpEnabled,
 		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
+	return s.persist(c)
+}
+
+// persist atomically writes c to disk (0600, via a temp file + rename) and
+// refreshes the in-memory cache from it.
+func (s *Store) persist(c Credentials) error {
 	raw, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
@@ -268,6 +293,117 @@ func (s *Store) write(username, password string) error {
 	s.refreshLocked()
 	s.mu.Unlock()
 	return nil
+}
+
+// currentOrErr returns the stored credentials, or an error if there are
+// none yet (or the file is unusable) — the starting point for a TOTP
+// mutation, which must change only the TOTP fields and leave the rest as is.
+func (s *Store) currentOrErr() (Credentials, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refreshLocked()
+	if !s.have {
+		if s.err != nil {
+			return Credentials{}, s.err
+		}
+		return Credentials{}, errors.New("no admin account exists yet")
+	}
+	return s.cached, nil
+}
+
+// --- two-factor authentication (TOTP) --------------------------------------
+
+// TOTPEnabled reports whether 2FA is turned on for the account.
+func (s *Store) TOTPEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refreshLocked()
+	return s.cached.TOTPEnabled
+}
+
+// checkAndConsume validates code against secret and, only if it is both
+// correct AND not already used, remembers its step so the identical code
+// can never be accepted a second time (replay protection) — a code stays
+// displayed on the operator's phone for up to ~60s given the ±1-step skew
+// tolerance, so without this, anyone who saw it once could reuse it for
+// that whole window.
+func (s *Store) checkAndConsume(secret, code string) bool {
+	step, ok := totp.ValidateAt(secret, code, time.Now())
+	if !ok {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if step <= s.totpLastStep {
+		return false
+	}
+	s.totpLastStep = step
+	return true
+}
+
+// BeginTOTPEnrollment generates a fresh secret and stores it as PENDING —
+// not yet enabled, so a wrong confirmation code, or never confirming at
+// all, can never lock the owner out of their own login. Starting enrollment
+// again before confirming just replaces the pending secret. Returns the
+// secret (for manual entry) and the matching otpauth:// URI (for a QR code
+// or a tap-to-open link on the same device).
+func (s *Store) BeginTOTPEnrollment() (secret, uri string, err error) {
+	c, err := s.currentOrErr()
+	if err != nil {
+		return "", "", err
+	}
+	secret, err = totp.GenerateSecret()
+	if err != nil {
+		return "", "", err
+	}
+	c.TOTPSecret, c.TOTPEnabled = secret, false
+	c.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := s.persist(c); err != nil {
+		return "", "", err
+	}
+	return secret, totp.URI(secret, c.Username, totpIssuer), nil
+}
+
+// ConfirmTOTP checks code against the pending secret from
+// BeginTOTPEnrollment and, if it matches, turns 2FA on — proving the
+// secret was captured correctly by the authenticator app before it becomes
+// a login requirement.
+func (s *Store) ConfirmTOTP(code string) error {
+	c, err := s.currentOrErr()
+	if err != nil {
+		return err
+	}
+	if c.TOTPSecret == "" {
+		return errors.New("no 2FA enrollment in progress — start one first")
+	}
+	if !s.checkAndConsume(c.TOTPSecret, code) {
+		return errors.New("wrong code")
+	}
+	c.TOTPEnabled = true
+	c.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return s.persist(c)
+}
+
+// VerifyTOTPCode checks a login-time code against the account's ENABLED
+// secret. It returns false (never an error) whenever 2FA isn't on, so a
+// caller can always just check the result without a separate state lookup.
+func (s *Store) VerifyTOTPCode(code string) bool {
+	c, err := s.currentOrErr()
+	if err != nil || !c.TOTPEnabled || c.TOTPSecret == "" {
+		return false
+	}
+	return s.checkAndConsume(c.TOTPSecret, code)
+}
+
+// DisableTOTP turns 2FA off and discards the secret.
+func (s *Store) DisableTOTP() error {
+	c, err := s.currentOrErr()
+	if err != nil {
+		return err
+	}
+	c.TOTPSecret, c.TOTPEnabled = "", false
+	c.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	return s.persist(c)
 }
 
 // Bootstrap adopts a password given the old way (ADMIN_PASSWORD in .env) when
