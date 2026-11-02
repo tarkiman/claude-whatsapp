@@ -331,8 +331,8 @@ Note that `go test -race` does not work on this Pi 5 (`ThreadSanitizer: unsuppor
 | Endpoint | Method | Used for |
 |---|---|---|
 | `/webhook` (bridge side) | POST | Receive `message` events from gowa |
-| `/send/message` | POST | Send a text reply. Body: `{phone, message}` plus optional `reply_message_id` to quote a message (used in team groups) |
-| `/send/chat-presence` | POST | "Typing" indicator. Body: `{phone, action}` — **`action` only accepts `"start"`/`"stop"`**, not `"composing"`/`"paused"` (a gotcha: those belong to a different field in the webhook payload) |
+| `/send/message` | POST | Send a text reply. Body: `{phone, message}` plus optional `reply_message_id` to quote a message (used in team groups). Since gowa v3.6, also needs an `X-Device-Id` header — see the note below the table |
+| `/send/chat-presence` | POST | "Typing" indicator. Body: `{phone, action}` — **`action` only accepts `"start"`/`"stop"`**, not `"composing"`/`"paused"` (a gotcha: those belong to a different field in the webhook payload). Same `X-Device-Id` requirement as `/send/message` |
 | `/message/{id}/reaction` | POST | Emoji reaction (not used by the bridge yet, available in the client). Body: `{phone, emoji}` |
 | `/devices` | POST | Create a new device slot (used once during pairing) |
 | `/app/login-with-code` | GET | Request a pairing code — needs `?device_id=` even though it's the "legacy" endpoint |
@@ -342,6 +342,8 @@ Note that `go test -race` does not work on this Pi 5 (`ThreadSanitizer: unsuppor
 | `/app/reconnect`, `/app/logout` | GET | Reconnect / unlink a device. Logout on an already-dead session purges the record but then returns an error |
 | `/user/my/groups` | GET | The groups the bot is in (`results.data[].JID` / `.Name`) — for the team-mode group picker |
 | `/group/participants` | GET | Members of a group: `jid`, `phone_number`, `lid`, `display_name`, `is_admin` — feeds the team roster and lets the bridge learn the bot's own LID |
+
+**A breaking gowa change, found live (2026-11-02):** upgrading the `gowa` Docker image (pinned to `:latest`, which Docker does not re-pull on its own — it keeps whatever was last pulled) picked up gowa v3.6, which started rejecting `/send/message` and `/send/chat-presence` with `400 DEVICE_ID_REQUIRED` unless an `X-Device-Id` header is set — previously these endpoints auto-selected the one registered device. `internal/gowa.Client` (used by the bridge, not the Admin UI's own `/app/*` calls) now resolves this itself: it calls `GET /devices`, confirms which entry is actually logged in via `/app/status` (the registry can hold several stale records from earlier incomplete pairing attempts, and `/devices`' own order is not meaningful — on the Pi where this was found, the real device was third in the list, not first), caches the result, and sends it as `X-Device-Id` on every `/send/*` call. If gowa still rejects it (e.g. the device was re-paired and got a new id), it refreshes once and retries before giving up.
 
 Full details of the webhook payload format: `docs/webhook-payload.md` in the [gowa repo](https://github.com/aldinokemal/go-whatsapp-web-multidevice).
 

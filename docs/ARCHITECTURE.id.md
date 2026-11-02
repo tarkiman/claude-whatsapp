@@ -331,8 +331,8 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 | Endpoint | Method | Dipakai untuk |
 |---|---|---|
 | `/webhook` (di sisi bridge) | POST | Terima event `message` dari gowa |
-| `/send/message` | POST | Kirim balasan teks. Body: `{phone, message}` ditambah `reply_message_id` opsional untuk mengutip pesan (dipakai di grup tim) |
-| `/send/chat-presence` | POST | Indikator "mengetik". Body: `{phone, action}` — **`action` cuma terima `"start"`/`"stop"`**, bukan `"composing"`/`"paused"` (gotcha: itu nilai untuk field lain di payload webhook) |
+| `/send/message` | POST | Kirim balasan teks. Body: `{phone, message}` ditambah `reply_message_id` opsional untuk mengutip pesan (dipakai di grup tim). Sejak gowa v3.6, juga perlu header `X-Device-Id` — lihat catatan di bawah tabel |
+| `/send/chat-presence` | POST | Indikator "mengetik". Body: `{phone, action}` — **`action` cuma terima `"start"`/`"stop"`**, bukan `"composing"`/`"paused"` (gotcha: itu nilai untuk field lain di payload webhook). Butuh `X-Device-Id` yang sama dengan `/send/message` |
 | `/message/{id}/reaction` | POST | Reaksi emoji (belum dipakai bridge, tersedia di client). Body: `{phone, emoji}` |
 | `/devices` | POST | Buat device slot baru (dipakai sekali saat pairing) |
 | `/app/login-with-code` | GET | Minta kode pairing — perlu `?device_id=` walau endpoint "legacy" |
@@ -342,6 +342,8 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 | `/app/reconnect`, `/app/logout` | GET | Reconnect / unlink device. Logout pada sesi yang sudah mati tetap menghapus record tetapi lalu mengembalikan error |
 | `/user/my/groups` | GET | Grup tempat bot menjadi anggota (`results.data[].JID` / `.Name`) — untuk pemilih grup mode tim |
 | `/group/participants` | GET | Anggota sebuah grup: `jid`, `phone_number`, `lid`, `display_name`, `is_admin` — mengisi roster tim dan membuat bridge tahu LID bot sendiri |
+
+**Perubahan gowa yang bersifat breaking, ditemukan live (2026-11-02):** meng-upgrade image Docker `gowa` (ter-pin ke `:latest`, yang Docker tidak otomatis tarik ulang — ia tetap pakai yang terakhir di-pull) ikut menarik gowa v3.6, yang mulai menolak `/send/message` dan `/send/chat-presence` dengan `400 DEVICE_ID_REQUIRED` kecuali header `X-Device-Id` disertakan — sebelumnya endpoint ini otomatis memilih satu-satunya device terdaftar. `internal/gowa.Client` (dipakai bridge, bukan panggilan `/app/*` milik Admin UI sendiri) sekarang menyelesaikannya sendiri: ia memanggil `GET /devices`, memastikan entry mana yang benar-benar login lewat `/app/status` (registry bisa menyimpan beberapa record basi dari percobaan pairing sebelumnya yang tidak selesai, dan urutan `/devices` sendiri tidak bermakna — di Pi tempat ini ditemukan, device yang asli ada di posisi ketiga, bukan pertama), men-cache hasilnya, dan mengirimkannya sebagai `X-Device-Id` di setiap panggilan `/send/*`. Kalau gowa masih menolaknya (mis. device di-pairing ulang dan mendapat id baru), ia me-refresh sekali dan mencoba ulang sebelum menyerah.
 
 Detail lengkap format payload webhook: `docs/webhook-payload.md` di [repo gowa](https://github.com/aldinokemal/go-whatsapp-web-multidevice).
 
