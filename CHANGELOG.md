@@ -2,6 +2,14 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.5.1] — 2026-11-02
+
+Requested right after shipping 2FA: manual secret entry worked, but scanning is faster and less error-prone than retyping 32 base32 characters.
+
+### Added
+
+- The 2FA enrollment card now renders the `otpauth://` link as a scannable QR code, using a vendored, dependency-free renderer (`web/vendor/qrcode.js`, MIT-licensed, no CDN, no network calls). Manual key entry and the tappable link still work exactly as before — the QR is an addition, not a replacement, so the card still works if that one script ever failed to load.
+
 ## [0.5.0] — 2026-11-02
 
 Requested right after putting the Admin UI behind a public Cloudflare Tunnel: the login only had a password and rate-limiting, no second factor.

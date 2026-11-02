@@ -242,6 +242,7 @@
 
       <div id="totp-setup" hidden>
         <p class="muted">Scan this with your authenticator app (Google Authenticator, Authy, etc.), or enter the secret manually, then type the 6-digit code it shows.</p>
+        <div id="totp-qr" style="margin:8px 0;width:176px;height:176px"></div>
         <p>Secret: <code id="totp-secret"></code></p>
         <p><a id="totp-uri" target="_blank" rel="noopener">Open in an authenticator app</a> (only works when tapped on the same device as the app)</p>
         <div class="actions">
@@ -272,6 +273,7 @@
   </section>
 </main>
 
+<script src="vendor/qrcode.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const api = async (path, opts = {}) => {
@@ -606,12 +608,15 @@ function renderTOTP(enabled) {
   $('totp-on').hidden = !enabled;
   $('totp-setup').hidden = true;
 }
+let totpQR = null;
 $('btn-totp-start').onclick = async (e) => {
   tmsg(''); e.target.disabled = true;
   try {
     const r = await post('/api/auth/totp/setup');
     $('totp-secret').textContent = r.secret;
     $('totp-uri').href = r.uri;
+    if (totpQR) { totpQR.clear(); totpQR.makeCode(r.uri); }
+    else { totpQR = new QRCode($('totp-qr'), { text: r.uri, width: 176, height: 176 }); }
     $('totp-setup').hidden = false; $('totp-off').hidden = true;
     $('totp-code').value = ''; $('totp-code').focus();
   } catch (err) { tmsg(err.message, 'err'); }
