@@ -78,6 +78,11 @@ func newRig(t *testing.T, pol access.Config) *rig {
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch req.URL.Path {
+		case "/devices":
+			// gowa requires a resolvable device_id on /send/* — one fake
+			// registered device is enough for the client to resolve and
+			// cache it, same as a real single-device personal-mode setup.
+			_, _ = w.Write([]byte(`{"code":"SUCCESS","results":[{"id":"fake-device-1","display_name":"fake","jid":"` + botPhone + `@s.whatsapp.net"}]}`))
 		case "/group/participants":
 			r.mu.Lock()
 			r.memberHits++

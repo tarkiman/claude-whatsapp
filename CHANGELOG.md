@@ -2,6 +2,14 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.4.5] — 2026-11-02
+
+Found live: the WhatsApp bridge stopped delivering any reply at all after the `gowa` Docker image (pinned to `:latest`, which is never re-pulled on its own) was upgraded to pick up a fix for a separate, unrelated pairing bug (`Client outdated (405)`). The newer gowa (v3.6) turned out to require an `X-Device-Id` header on every send that it previously filled in automatically — every reply failed with `400 DEVICE_ID_REQUIRED` until this was fixed.
+
+### Fixed
+
+- `internal/gowa.Client` (the bridge's send path) now resolves and caches which registered device is actually logged in — via `/devices` + `/app/status`, since the registry can hold several stale records from earlier incomplete pairing attempts and their order is not meaningful — and sends it as `X-Device-Id` on every `/send/message` and `/send/chat-presence` call. If gowa still rejects it (e.g. after a re-pair changed the device id), it refreshes once and retries before giving up.
+
 ## [0.4.4] — 2026-10-02
 
 Hit for real on the same set-top box right after v0.4.3's prerequisite check fixed the previous confusing log: a prior install attempt had gotten far enough to start the bridge/admin services but was interrupted before finishing (the admin-login prompt never got an answer because the terminal session died), and re-running the installer to pick up where it left off failed outright.
