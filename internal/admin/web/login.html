@@ -50,6 +50,10 @@
     </div>
     <p id="rules" class="muted" style="font-size:12px;margin:8px 0 0" hidden>At least 10 characters, with at least 5 different ones. A short phrase of unrelated words works well (for example three words with spaces).</p>
     <div class="row"><input id="show" type="checkbox"><label for="show" style="margin:0">Show password</label></div>
+    <div id="totp-wrap" hidden>
+      <label for="code">Authentication code</label>
+      <input id="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456">
+    </div>
     <button id="go" type="submit">Sign in</button>
   </form>
 
@@ -106,10 +110,22 @@ $('form').onsubmit = async (e) => {
   if (mode === 'setup' && $('pass').value !== $('again').value) { show('The two passwords are different.'); return; }
   $('go').disabled = true;
   try {
-    await post(mode === 'setup' ? '/api/setup' : '/api/login', { username: $('user').value.trim(), password: $('pass').value });
+    const body = { username: $('user').value.trim(), password: $('pass').value };
+    if (!$('totp-wrap').hidden) body.totpCode = $('code').value.trim();
+    const res = await post(mode === 'setup' ? '/api/setup' : '/api/login', body);
+    if (res.totpRequired) {
+      $('totp-wrap').hidden = false;
+      $('lead').textContent = 'Enter the 6-digit code from your authenticator app.';
+      $('code').value = ''; $('code').focus();
+      $('go').disabled = false;
+      return;
+    }
     location.replace('/');
   } catch (err) {
-    show(err.message); $('pass').value = ''; $('again').value = ''; $('pass').focus(); $('go').disabled = false;
+    show(err.message);
+    if ($('totp-wrap').hidden) { $('pass').value = ''; $('again').value = ''; $('pass').focus(); }
+    else { $('code').value = ''; $('code').focus(); }
+    $('go').disabled = false;
   }
 };
 init();

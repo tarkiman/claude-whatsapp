@@ -2,6 +2,15 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [0.5.0] — 2026-11-02
+
+Requested right after putting the Admin UI behind a public Cloudflare Tunnel: the login only had a password and rate-limiting, no second factor.
+
+### Added
+
+- **Optional two-factor authentication (2FA/TOTP)** for the Admin login. Turn it on from the *Admin login* card: it shows a setup key for any TOTP authenticator app (Google Authenticator, Authy, 1Password, etc. — or tap the enrollment link if you're on the same device as the app) and asks for the code it then shows, to prove it was captured correctly before it becomes required. Once on, signing in needs the password *and* a fresh code; each code only works once, even within its own validity window. Implemented with the standard library only (`internal/totp` — RFC 6238 on RFC 4226, conformance pinned against the official test vectors), consistent with `internal/adminauth`'s existing no-third-party-module stance.
+- `bin/admin totp status` / `bin/admin totp disable` — the recovery path for a lost authenticator device, needing no login for the same reason `bin/admin passwd` doesn't: it can only run on the host, by a user who can already read the credentials file.
+
 ## [0.4.5] — 2026-11-02
 
 Found live: the WhatsApp bridge stopped delivering any reply at all after the `gowa` Docker image (pinned to `:latest`, which is never re-pulled on its own) was upgraded to pick up a fix for a separate, unrelated pairing bug (`Client outdated (405)`). The newer gowa (v3.6) turned out to require an `X-Device-Id` header on every send that it previously filled in automatically — every reply failed with `400 DEVICE_ID_REQUIRED` until this was fixed.
