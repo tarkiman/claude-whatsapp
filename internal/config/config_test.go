@@ -3,6 +3,7 @@ package config
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestFromEnvDefaultsAndRequirements(t *testing.T) {
@@ -32,5 +33,30 @@ func TestFromEnvDefaultsAndRequirements(t *testing.T) {
 	t.Setenv("WEBHOOK_SECRET", "")
 	if _, err := FromEnv(); err == nil {
 		t.Error("an empty WEBHOOK_SECRET must be refused")
+	}
+}
+
+func TestJobsConfig(t *testing.T) {
+	t.Setenv("WEBHOOK_SECRET", "s")
+	t.Setenv("ALLOWED_SENDERS", "6281234567890")
+	cfg, err := FromEnv()
+	if err != nil || cfg.JobsAddr != "" || cfg.JobsWhatsAppTo != "6281234567890@s.whatsapp.net" {
+		t.Fatalf("off by default: %+v, %v", cfg, err)
+	}
+	t.Setenv("JOBS_ADDR", "127.0.0.1:8094")
+	if _, err := FromEnv(); err == nil {
+		t.Error("JOBS_ADDR without a token: want an error")
+	}
+	t.Setenv("JOBS_TOKEN", "0123456789abcdef0123456789")
+	if _, err := FromEnv(); err == nil {
+		t.Error("JOBS_ADDR without JOBS_PROJECTS: want an error")
+	}
+	t.Setenv("JOBS_PROJECTS", "*")
+	if cfg, err := FromEnv(); err != nil || cfg.JobsTimeout != 30*time.Minute || cfg.JobsMaxRunning != 2 {
+		t.Errorf("valid: %+v, %v", cfg, err)
+	}
+	t.Setenv("JOBS_ADDR", "0.0.0.0:8094")
+	if _, err := FromEnv(); err == nil {
+		t.Error("JOBS_ADDR beyond loopback: want an error")
 	}
 }

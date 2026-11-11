@@ -310,6 +310,14 @@ Note that `go test -race` does not work on this Pi 5 (`ThreadSanitizer: unsuppor
 | `WHISPER_MODEL` | bridge | `./data/whisper/ggml-base.bin` | whisper.cpp ggml model |
 | `FFMPEG_BIN` | bridge | `ffmpeg` | For normalizing Opus-in-Ogg → WAV before transcription |
 | `WHISPER_LANG` | bridge | `auto` | whisper language code, or `auto` for per-clip detection |
+| `JOBS_ADDR` | bridge | (off) | Voice job API address, loopback only, e.g. `127.0.0.1:8094` ([§17](#17-voice-jobs-internaljobs)) |
+| `JOBS_TOKEN` | bridge | — (**required** with `JOBS_ADDR`) | Bearer token for the job API, 24+ characters |
+| `JOBS_PROJECTS` | bridge | — (**required** with `JOBS_ADDR`) | Project names allowed, comma-separated, or `*` for every git repo in `JOBS_PROJECTS_DIR` |
+| `JOBS_PROJECTS_DIR` | bridge | `~/repository` | Where the projects are |
+| `JOBS_NOTIFY_URL` | bridge | (none) | Gets `{"text","source":"kode"}` for spoken progress and results (e.g. kawan-bridge's `http://127.0.0.1:8791/notify`) |
+| `JOBS_WHATSAPP_TO` | bridge | the `ALLOWED_SENDERS` number | Chat that gets the full job reports |
+| `JOBS_SESSIONS_PATH` | bridge | `~/.claude-whatsapp/voice-sessions.json` | project → session map for voice jobs |
+| `JOBS_TIMEOUT`, `JOBS_MAX_RUNNING`, `JOBS_PROGRESS_EVERY` | bridge | `30m`, `2`, `4m` | Per-job time limit, jobs running at once, spoken progress interval (`0` = off) |
 | `GOWA_PORT` | docker-compose | `3011` | Host port for gowa |
 | `ADMIN_ADDR` | admin | `127.0.0.1:8098` | Comma-separated `host:port` list the Admin UI listens on. Non-loopback requires specific IPs + `ADMIN_ALLOWED_NETS`. Addresses that don't exist yet at boot are retried every 5 seconds |
 | `ADMIN_ALLOWED_NETS` | admin | (empty) | Client CIDRs allowed to connect, comma-separated (loopback is always allowed). **Required** if `ADMIN_ADDR` contains a non-loopback address |
@@ -382,3 +390,52 @@ Each alert is a Discord embed (`alerts.WebhookPayload`/`Embed`/`EmbedField` — 
 *Send test alert* bypasses the monitor and the on/off setting entirely, posting `alerts.TestPayload()` (a distinctly-colored, clearly-labeled embed) directly through `alerts.Notifier` so a webhook can be confirmed working on its own.
 
 **Installer.** `scripts/quick-install.sh` (`curl | bash`) resolves the release to install (latest, or a pinned `--version`), then runs **preflight** (`scripts/preflight.sh`, fetched from that exact release tag via `raw.githubusercontent.com`) *before downloading the release tarball at all* — Docker, the Compose plugin, access to the Docker daemon, `claude` on `PATH` and systemd are all checked before anything is asked, written or downloaded, every missing piece is reported at once with how to fix it, and a failed run changes nothing (a `claude` in `~/.local/bin` that is not on `PATH` yet — where the official installer puts it — is picked up, and `deploy.sh` bakes that `PATH` into the systemd units so the bridge finds it too). This early check is best-effort: if the fetch fails (an older release tag predating `preflight.sh`, or a transient GitHub/CDN hiccup — raw.githubusercontent.com has been observed caching a 404 briefly for a file requested moments before it existed), it is skipped silently and the installer falls through to downloading as before. Once prerequisites are confirmed, it downloads the tarball for the machine's architecture (arm64 / armv7 / amd64), stops `claude-whatsapp.service`/`claude-whatsapp-admin.service` if a previous install left them running (otherwise overwriting their binaries below fails with "Text file busy" — hit for real re-running the installer against an install that got as far as starting the services but was interrupted before finishing), and extracts the tarball to `~/claude-whatsapp` (running it again = upgrade: `.env` and `data/` are left alone), then calls `scripts/install.sh`, which sources the same `preflight.sh` (now bundled in the extracted release) and runs it again as a safety net — this is also the only check that runs for a source checkout or a local `--tarball`, which skip the early network fetch — covered by `--skip-start` too — and then creates `.env` (random secrets, `chmod 600`, sender number normalized to a JID), runs `docker compose up -d`, and runs `scripts/deploy.sh`, which installs the systemd units using the prebuilt binaries in `bin/`. The tarballs (including `scripts/preflight.sh`) are produced by `scripts/package-release.sh` (pure Go, `CGO_ENABLED=0`) in the `.github/workflows/release.yml` workflow when a `v*` tag is pushed. WhatsApp pairing and Claude sign-in are deliberately not done by the installer — both are done from the Admin UI.
+
+## 17. Voice jobs (`internal/jobs`)
+
+An optional second front door, for a voice assistant rather than WhatsApp. Its first user is Eca, the author's assistant on
+xiaozhi.me, through kawan-bridge (repo `virtual-assistant`). The assistant hands over a coding task with one HTTP call. The
+task runs in the background as `claude -p` in that project's directory. When it ends, a short spoken summary goes to a notify
+URL, which has the assistant read it out, and the full report goes to WhatsApp.
+
+```mermaid
+sequenceDiagram
+  participant VA as voice assistant (kawan-bridge)
+  participant J as jobs API (127.0.0.1:8094)
+  participant C as claude -p (project dir)
+  participant N as JOBS_NOTIFY_URL
+  participant W as WhatsApp (gowa)
+  VA->>J: POST /jobs {project, instruction}
+  J-->>VA: 202 job (returns at once)
+  J->>C: stream-json, --resume <project session>, --append-system-prompt
+  C-->>J: tool calls (activity: "menjalankan tes", "mengubah main.go")
+  J->>N: progress note every JOBS_PROGRESS_EVERY (max 3)
+  C-->>J: final message: RINGKASAN + DETAIL
+  J->>N: "Kerjaan di <project> selesai. <RINGKASAN>"
+  J->>W: <project>, instruction, DETAIL
+```
+
+The API needs `Authorization: Bearer $JOBS_TOKEN` on every call:
+
+| Route | Does |
+|---|---|
+| `GET /projects` | Allowed projects (git repos in `JOBS_PROJECTS_DIR`), each with whether it has a session and its running job |
+| `POST /jobs {"project", "instruction", "new_session"}` | `202` job · `404` unknown project, with the list · `409` busy, with the job in the way |
+| `GET /jobs?project=&limit=` | Recent jobs, newest first |
+| `GET /jobs/{id}` | Status (`running`, `done`, `failed`, `cancelled`), `activity`, `steps`, `summary`, `detail`, `error` |
+| `POST /jobs/{id}/cancel` | Stops the job and its whole process group |
+
+**Rules for a job:**
+- **Matching project names.** Names are matched loosely ("media nest" → `media-nest`), because the instruction came through
+  speech recognition.
+- **One job at a time.** Each project runs one job at a time, and `JOBS_MAX_RUNNING` jobs can run in all.
+- **Sessions.** Each project keeps one session in `JOBS_SESSIONS_PATH`, separate from the WhatsApp chats' sessions. A job
+  resumes it unless `new_session` is set, and the session is saved only when a job succeeds.
+- **Rules added to the system prompt.** The appended prompt (`jobs.SystemPrompt`) tells Claude to:
+  - read misheard names generously;
+  - never push, merge, deploy, release or delete without `KONFIRMASI: ya` in the instruction, and ask instead;
+  - follow the repo's `CLAUDE.md`;
+  - end with `RINGKASAN:` (one to three spoken Indonesian sentences in the assistant's voice, never naming Claude) and
+    `DETAIL:` (the WhatsApp report).
+- **Where it can be reached.** `JOBS_ADDR` must be a loopback address, and the token must be 24 characters or more.
+- **History.** Job history lives in memory (the last 50 jobs). A restart stops running jobs without a report.

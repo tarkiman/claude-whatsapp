@@ -2,6 +2,23 @@
 
 All notable changes per release. Versions follow [semantic versioning](https://semver.org/); while the major version is 0, a minor bump may contain breaking changes — they are listed under **Upgrade notes**.
 
+## [Unreleased]
+
+Requested to vibe-code by voice: the author's voice assistant (Eca, on xiaozhi.me) hands Claude Code a task and reads the
+result out.
+
+### Added
+
+- **Voice jobs** (`internal/jobs`, off unless `JOBS_ADDR` is set): a token-protected loopback API.
+  - Starts `claude -p` in a project directory in the background (`--output-format stream-json`), and follows its tool
+    calls as a spoken activity ("menjalankan tes").
+  - Reports a short spoken summary to `JOBS_NOTIFY_URL` and the full report to WhatsApp.
+  - Each project has its own session, separate from the WhatsApp chats.
+  - Runs one job per project; cancelling kills the whole process group.
+  - Outward or destructive actions wait for a spoken confirmation.
+  - See `docs/ARCHITECTURE.md` §17.
+- `claude.Runner.Stream`: streamed runs in a given directory with an appended system prompt (the WhatsApp path still uses `Reply`).
+
 ## [0.5.1] — 2026-11-02
 
 Requested right after shipping 2FA: manual secret entry worked, but scanning is faster and less error-prone than retyping 32 base32 characters.
