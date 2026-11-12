@@ -143,7 +143,7 @@ func startJobs(cfg *config.Config, runner *claude.Runner, gowaClient *gowa.Clien
 		Timeout:       cfg.JobsTimeout,
 		MaxRunning:    cfg.JobsMaxRunning,
 		ProgressEvery: cfg.JobsProgressEvery,
-		ProgressMax:   3,
+		ProgressMax:   0, // a note every JOBS_PROGRESS_EVERY while the job moves on
 		Notify:        jobs.Notifier(cfg.JobsNotifyURL),
 		Detail:        detail,
 	}, runner, sessions)

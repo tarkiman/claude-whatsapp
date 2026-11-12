@@ -11,7 +11,8 @@ result out.
 
 - **Voice jobs** (`internal/jobs`, off unless `JOBS_ADDR` is set): a token-protected loopback API.
   - Starts `claude -p` in a project directory in the background (`--output-format stream-json`), and follows its tool
-    calls as a spoken activity ("menjalankan tes").
+    calls as a spoken activity ("menjalankan tes", "mengetes tampilan di browser"). A spoken progress note goes out every
+    `JOBS_PROGRESS_EVERY`, only when the job has moved on since the last one.
   - Reports a short spoken summary to `JOBS_NOTIFY_URL` and the full report to WhatsApp.
   - Each project has its own session, separate from the WhatsApp chats.
   - Runs one job per project; cancelling kills the whole process group.

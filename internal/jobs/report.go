@@ -95,8 +95,22 @@ func Describe(t claude.ToolUse) string {
 }
 
 func describeCommand(cmd string) string {
-	c := strings.ToLower(cmd)
+	c := strings.ToLower(strings.TrimSpace(cmd))
+	cmd = strings.TrimSpace(cmd)
+	// "cd frontend && npm run build": what matters is after the cd.
+	for strings.HasPrefix(c, "cd ") {
+		i := strings.Index(c, "&&")
+		if i < 0 {
+			return "berpindah folder"
+		}
+		c = strings.TrimSpace(c[i+2:])
+		cmd = strings.TrimSpace(cmd[len(cmd)-len(c):])
+	}
 	switch {
+	case containsAny(c, "chromium", "chrome", "playwright", "puppeteer", "screenshot"):
+		return "mengetes tampilan di browser"
+	case containsAny(c, "vue-tsc", "tsc ", "eslint", "go vet", "gofmt", "golangci", "ruff", "flake8", "prettier", "npm run lint", "npm run type"):
+		return "memeriksa kode"
 	case containsAny(c, "go test", "pytest", "npm test", "npm run test", "vitest", "gradlew test", "cargo test"):
 		return "menjalankan tes"
 	case containsAny(c, "git push"):
@@ -107,12 +121,18 @@ func describeCommand(cmd string) string {
 		return "mengurus pull request"
 	case strings.HasPrefix(c, "git ") || strings.Contains(c, " git "):
 		return "memeriksa git"
-	case containsAny(c, "go build", "npm run build", "gradlew", "docker build", "docker compose", "make "):
+	case containsAny(c, "go build", "npm run build", "vite build", "gradlew", "docker build", "make "):
 		return "membangun aplikasi"
 	case containsAny(c, "npm install", "go mod", "pip install"):
 		return "memasang dependensi"
+	case containsAny(c, "docker compose", "docker restart", "systemctl"):
+		return "menjalankan ulang layanan"
 	case containsAny(c, "curl ", "wget "):
 		return "mengecek layanan"
+	case containsAny(c, "sqlite3", "mysql ", "psql"):
+		return "memeriksa database"
+	case strings.HasPrefix(c, "sleep "):
+		return "menunggu proses"
 	}
 	return fmt.Sprintf("menjalankan perintah %s", firstWord(cmd))
 }

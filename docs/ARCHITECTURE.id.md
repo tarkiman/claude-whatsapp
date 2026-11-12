@@ -409,7 +409,7 @@ sequenceDiagram
   J-->>VA: 202 job (langsung kembali)
   J->>C: stream-json, --resume <sesi project>, --append-system-prompt
   C-->>J: tool call (aktivitas: "menjalankan tes", "mengubah main.go")
-  J->>N: kabar progres tiap JOBS_PROGRESS_EVERY (maks 3)
+  J->>N: kabar progres tiap JOBS_PROGRESS_EVERY (hanya kalau ada kemajuan)
   C-->>J: pesan akhir: RINGKASAN + DETAIL
   J->>N: "Kerjaan di <project> selesai. <RINGKASAN>"
   J->>W: <project>, instruksi, DETAIL

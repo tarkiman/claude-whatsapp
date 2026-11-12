@@ -258,7 +258,9 @@ func (m *Manager) run(ctx context.Context, j *Job) {
 	m.report(done)
 }
 
-// progress sends a spoken note every ProgressEvery while the job runs.
+// progress sends a spoken note every ProgressEvery while the job runs, but only when it has moved on since the
+// last note (new tool calls), so a long quiet step (a build, a browser test) is not announced twice. ProgressMax
+// caps the notes per job; 0 means no cap (the job's Timeout still bounds it).
 func (m *Manager) progress(ctx context.Context, j *Job) (stop func()) {
 	if m.opt.ProgressEvery <= 0 || m.opt.Notify == nil {
 		return func() {}
@@ -267,7 +269,8 @@ func (m *Manager) progress(ctx context.Context, j *Job) (stop func()) {
 	go func() {
 		t := time.NewTicker(m.opt.ProgressEvery)
 		defer t.Stop()
-		for sent := 0; sent < m.opt.ProgressMax; {
+		lastSteps := -1
+		for sent := 0; m.opt.ProgressMax == 0 || sent < m.opt.ProgressMax; {
 			select {
 			case <-quit:
 				return
@@ -275,8 +278,12 @@ func (m *Manager) progress(ctx context.Context, j *Job) (stop func()) {
 				return
 			case <-t.C:
 				m.mu.Lock()
-				activity, mins := j.Activity, int(time.Since(j.StartedAt).Minutes())
+				activity, steps, mins := j.Activity, j.Steps, int(time.Since(j.StartedAt).Minutes())
 				m.mu.Unlock()
+				if steps == lastSteps {
+					continue
+				}
+				lastSteps = steps
 				m.opt.Notify(fmt.Sprintf("Kerjaan di %s masih jalan, sudah %d menit. Sekarang Eca %s.", spoken(j.Project), mins, activity))
 				sent++
 			}

@@ -214,12 +214,16 @@ func TestParseReport(t *testing.T) {
 
 func TestDescribe(t *testing.T) {
 	cases := map[string]claude.ToolUse{
-		"mengubah main.go":        {Name: "Edit", Input: map[string]any{"file_path": "/x/cmd/main.go"}},
-		"menjalankan tes":         {Name: "Bash", Input: map[string]any{"command": "cd x && go test ./..."}},
-		"mengirim ke GitHub":      {Name: "Bash", Input: map[string]any{"command": "git push -u origin feat"}},
-		"membuat commit":          {Name: "Bash", Input: map[string]any{"command": "git commit -m x"}},
-		"mencari di kode":         {Name: "Grep", Input: map[string]any{"pattern": "x"}},
-		"menjalankan perintah ls": {Name: "Bash", Input: map[string]any{"command": "ls -la"}},
+		"mengubah main.go":             {Name: "Edit", Input: map[string]any{"file_path": "/x/cmd/main.go"}},
+		"menjalankan tes":              {Name: "Bash", Input: map[string]any{"command": "cd x && go test ./..."}},
+		"mengirim ke GitHub":           {Name: "Bash", Input: map[string]any{"command": "git push -u origin feat"}},
+		"membuat commit":               {Name: "Bash", Input: map[string]any{"command": "git commit -m x"}},
+		"mencari di kode":              {Name: "Grep", Input: map[string]any{"pattern": "x"}},
+		"menjalankan perintah ls":      {Name: "Bash", Input: map[string]any{"command": "ls -la"}},
+		"membangun aplikasi":           {Name: "Bash", Input: map[string]any{"command": "cd frontend && npm run build"}},
+		"mengetes tampilan di browser": {Name: "Bash", Input: map[string]any{"command": "/usr/bin/chromium --headless=new about:blank"}},
+		"memeriksa kode":               {Name: "Bash", Input: map[string]any{"command": "cd frontend && cd src && npx vue-tsc --noEmit"}},
+		"berpindah folder":             {Name: "Bash", Input: map[string]any{"command": "cd /tmp"}},
 	}
 	for want, tool := range cases {
 		if got := Describe(tool); got != want {
@@ -242,5 +246,26 @@ func TestHTTPNeedsToken(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "media-nest") {
 		t.Errorf("unknown project: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProgressOnlyWhenMovingOn(t *testing.T) {
+	s := newSink()
+	r := &fakeRunner{release: make(chan struct{})}
+	sess := &memSessions{m: map[string]string{}}
+	m := New(Options{ProjectsDir: projectsDir(t, "media-nest"), Allowed: []string{"*"}, Timeout: time.Minute,
+		MaxRunning: 1, ProgressEvery: 30 * time.Millisecond, Notify: s.notify, Detail: s.detail}, r, sess)
+	m.Start("media-nest", "x", false)
+	time.Sleep(200 * time.Millisecond) // ~6 ticks, but the fake made one tool call only
+	close(r.release)
+	s.wait(t)
+	progress := 0
+	for _, said := range s.said {
+		if strings.Contains(said, "masih jalan") {
+			progress++
+		}
+	}
+	if progress != 1 {
+		t.Errorf("got %d progress notes for a job that moved on once, want 1: %q", progress, s.said)
 	}
 }
