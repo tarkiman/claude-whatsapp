@@ -208,6 +208,8 @@ Everything lives in `.env` in the install directory (`chmod 600`; fully commente
 | `ADMIN_AUTH_FILE` | Where the admin login is stored (default `~/.claude-whatsapp/admin.json`). |
 | `ALERTS_FILE` | Where the Discord alert setup is stored (default `~/.claude-whatsapp/alerts.json`). |
 | `ADMIN_PASSWORD`, `ADMIN_USER` | **Legacy bootstrap only:** if no login file exists, this password is hashed into one on the first start (user `ADMIN_USER`, default `admin`); afterwards it is ignored — remove it from `.env`. |
+| `JOBS_ADDR`, `JOBS_TOKEN`, `JOBS_PROJECTS` | **Optional voice job API** for a voice assistant: loopback address, bearer token (24+ characters), allowed repos (or `*`). Off unless `JOBS_ADDR` is set — see [`docs/ARCHITECTURE.md` §17](docs/ARCHITECTURE.md#17-voice-jobs-internaljobs). |
+| `JOBS_NOTIFY_URL`, `JOBS_WHATSAPP_TO` | Where a voice job's spoken summary is posted, and which chat gets its full report (default: your `ALLOWED_SENDERS` number). |
 
 To change `.env`: edit it, then `systemctl --user restart claude-whatsapp.service claude-whatsapp-admin.service` (plus `docker compose up -d` in the install directory if you changed anything gowa-related).
 
@@ -317,6 +319,7 @@ Start with the [Admin UI](#admin-ui): the status, the reasons and the logs usual
 - **One `claude -p` per chat at a time** — locked per `chat_id`; further messages for the same chat queue instead of fighting over the same `--resume` session.
 - **Personal and team modes** — one number in DMs, or one group with an approved roster and required @mention; managed from the Admin UI and applied without a restart ([above](#who-can-instruct-the-bot)).
 - **Admin UI** — status, WhatsApp recovery, Claude sign-in, access control and Discord alerts, behind its own login ([above](#admin-ui)).
+- **Voice jobs (optional)** — a loopback API that lets a voice assistant hand Claude Code a task in one of your repos. The task runs in the background and is reported back as a short spoken summary plus a full WhatsApp message ([§17](docs/ARCHITECTURE.md#17-voice-jobs-internaljobs)).
 
 **Not implemented yet:** tool-call approval via emoji reaction, and cross-chat rate limiting (every different chat is its own `claude -p` process, with no cap on how many run in parallel). Contributions and PRs welcome.
 
@@ -334,6 +337,7 @@ claude-whatsapp/
 │   ├── config/                      # read & validate .env
 │   ├── gowa/                        # REST client for gowa
 │   ├── webhook/                     # HMAC verification, attachment parsing, orchestration
+│   ├── jobs/                        # voice job API: background claude -p per project, spoken + WhatsApp reports
 │   ├── claude/                      # exec claude -p, parse JSON
 │   ├── session/                     # chat_id -> session_id
 │   ├── pending/                     # durable queue — replayed after a crash

@@ -310,6 +310,14 @@ Catatan `go test -race` tidak jalan di Pi 5 ini (`ThreadSanitizer: unsupported V
 | `WHISPER_MODEL` | bridge | `./data/whisper/ggml-base.bin` | Model ggml whisper.cpp |
 | `FFMPEG_BIN` | bridge | `ffmpeg` | Untuk normalisasi Opus-in-Ogg → WAV sebelum transkripsi |
 | `WHISPER_LANG` | bridge | `auto` | Kode bahasa whisper, atau `auto` untuk deteksi per-klip |
+| `JOBS_ADDR` | bridge | (mati) | Alamat API voice job, hanya loopback, mis. `127.0.0.1:8094` ([§17](#17-voice-jobs-internaljobs)) |
+| `JOBS_TOKEN` | bridge | — (**wajib** bersama `JOBS_ADDR`) | Token Bearer untuk API job, minimal 24 karakter |
+| `JOBS_PROJECTS` | bridge | — (**wajib** bersama `JOBS_ADDR`) | Nama project yang diizinkan, dipisah koma, atau `*` untuk semua repo git di `JOBS_PROJECTS_DIR` |
+| `JOBS_PROJECTS_DIR` | bridge | `~/repository` | Folder tempat project-project berada |
+| `JOBS_NOTIFY_URL` | bridge | (tidak ada) | Menerima `{"text","source":"kode"}` untuk kabar progres dan hasil yang dibacakan (mis. `http://127.0.0.1:8791/notify`) |
+| `JOBS_WHATSAPP_TO` | bridge | nomor `ALLOWED_SENDERS` | Chat yang menerima laporan job lengkap |
+| `JOBS_SESSIONS_PATH` | bridge | `~/.claude-whatsapp/voice-sessions.json` | peta project → sesi untuk voice job |
+| `JOBS_TIMEOUT`, `JOBS_MAX_RUNNING`, `JOBS_PROGRESS_EVERY` | bridge | `30m`, `2`, `4m` | Batas waktu per job, jumlah job yang boleh jalan bersamaan, jeda kabar progres (`0` = mati) |
 | `GOWA_PORT` | docker-compose | `3011` | Port host untuk gowa |
 | `ADMIN_ADDR` | admin | `127.0.0.1:8098` | Daftar `host:port` (pisah koma) tempat Admin UI listen. Non-loopback wajib IP spesifik + `ADMIN_ALLOWED_NETS`. Alamat yang belum ada saat boot dicoba ulang tiap 5 detik |
 | `ADMIN_ALLOWED_NETS` | admin | (kosong) | CIDR klien yang boleh konek, pisah koma (loopback selalu boleh). **Wajib** kalau `ADMIN_ADDR` berisi alamat non-loopback |
@@ -382,3 +390,53 @@ Setiap alert berupa embed Discord (`alerts.WebhookPayload`/`Embed`/`EmbedField` 
 *Send test alert* melewati monitor dan pengaturan on/off sepenuhnya, memposting `alerts.TestPayload()` (embed berwarna berbeda dan berlabel jelas) langsung lewat `alerts.Notifier` supaya sebuah webhook bisa dipastikan bekerja sendiri.
 
 **Installer.** `scripts/quick-install.sh` (`curl | bash`) menentukan rilis yang akan dipasang (terbaru, atau `--version` tertentu), lalu menjalankan **preflight** (`scripts/preflight.sh`, diambil dari tag rilis yang persis sama lewat `raw.githubusercontent.com`) *sebelum mengunduh tarball rilis sama sekali* — Docker, plugin Compose, akses ke daemon Docker, `claude` di `PATH`, dan systemd diperiksa sebelum ada yang ditanyakan, ditulis, atau diunduh, setiap kekurangan dilaporkan sekaligus beserta cara memperbaikinya, dan eksekusi yang gagal tidak mengubah apa pun (`claude` di `~/.local/bin` yang belum ada di `PATH` — tempat installer resmi meletakkannya — ikut dipakai, dan `deploy.sh` memasukkan `PATH` itu ke unit systemd supaya bridge juga menemukannya). Pengecekan dini ini bersifat best-effort: kalau pengambilannya gagal (tag rilis lama yang belum punya `preflight.sh`, atau gangguan GitHub/CDN sesaat — raw.githubusercontent.com pernah tertangkap mem-cache 404 sebentar untuk file yang diminta beberapa saat sebelum file itu ada), ia dilewati diam-diam dan installer lanjut ke alur unduh seperti biasa. Setelah prasyarat terkonfirmasi, ia mengunduh tarball untuk arsitektur mesin (arm64 / armv7 / amd64), menghentikan `claude-whatsapp.service`/`claude-whatsapp-admin.service` kalau instalasi sebelumnya meninggalkannya masih berjalan (kalau tidak, menimpa binary-nya di bawah ini gagal dengan "Text file busy" — ini benar-benar terjadi saat installer dijalankan ulang terhadap instalasi yang sempat sampai menjalankan service tapi terputus sebelum selesai), dan mengekstrak tarball-nya ke `~/claude-whatsapp` (menjalankan ulang = upgrade: `.env` dan `data/` tidak disentuh), lalu memanggil `scripts/install.sh`, yang men-source `preflight.sh` yang sama (kini ikut dalam rilis yang diekstrak) dan menjalankannya lagi sebagai jaring pengaman — ini juga satu-satunya pengecekan yang jalan untuk checkout source atau `--tarball` lokal, yang melewati pengambilan jaringan dini itu — dilewati juga dengan `--skip-start` — lalu membuat `.env` (secret acak, `chmod 600`, nomor pengirim dinormalisasi ke JID), `docker compose up -d`, dan `scripts/deploy.sh` yang memasang unit systemd memakai binary siap pakai di `bin/`. Tarball (termasuk `scripts/preflight.sh`) dibuat `scripts/package-release.sh` (pure Go, `CGO_ENABLED=0`) oleh workflow `.github/workflows/release.yml` saat tag `v*` di-push. Pairing WhatsApp dan login Claude sengaja tidak dilakukan installer — keduanya dikerjakan dari Admin UI.
+
+## 17. Voice jobs (`internal/jobs`)
+
+Pintu kedua yang opsional, untuk asisten suara, bukan WhatsApp. Pemakai pertamanya Eca, asisten penulis di xiaozhi.me, lewat
+kawan-bridge (repo `virtual-assistant`). Asisten menyerahkan tugas coding dengan satu panggilan HTTP. Tugasnya berjalan di
+belakang sebagai `claude -p` di folder project itu. Setelah selesai, ringkasan lisan singkat dikirim ke URL notify supaya
+dibacakan asisten, dan laporan lengkapnya dikirim ke WhatsApp.
+
+```mermaid
+sequenceDiagram
+  participant VA as asisten suara (kawan-bridge)
+  participant J as jobs API (127.0.0.1:8094)
+  participant C as claude -p (folder project)
+  participant N as JOBS_NOTIFY_URL
+  participant W as WhatsApp (gowa)
+  VA->>J: POST /jobs {project, instruction}
+  J-->>VA: 202 job (langsung kembali)
+  J->>C: stream-json, --resume <sesi project>, --append-system-prompt
+  C-->>J: tool call (aktivitas: "menjalankan tes", "mengubah main.go")
+  J->>N: kabar progres tiap JOBS_PROGRESS_EVERY (hanya kalau ada kemajuan)
+  C-->>J: pesan akhir: RINGKASAN + DETAIL
+  J->>N: "Kerjaan di <project> selesai. <RINGKASAN>"
+  J->>W: <project>, instruksi, DETAIL
+```
+
+Setiap panggilan API wajib memakai header `Authorization: Bearer $JOBS_TOKEN`:
+
+| Route | Fungsi |
+|---|---|
+| `GET /projects` | Project yang diizinkan (repo git di `JOBS_PROJECTS_DIR`), apakah sudah punya sesi, dan job yang sedang jalan |
+| `POST /jobs {"project", "instruction", "new_session"}` | `202` job · `404` project tidak dikenal, beserta daftarnya · `409` sibuk, beserta job yang menghalangi |
+| `GET /jobs?project=&limit=` | Job terbaru, yang paling baru di atas |
+| `GET /jobs/{id}` | Status (`running`, `done`, `failed`, `cancelled`), `activity`, `steps`, `summary`, `detail`, `error` |
+| `POST /jobs/{id}/cancel` | Menghentikan job beserta seluruh grup prosesnya |
+
+**Aturan sebuah job:**
+- **Pencocokan nama project.** Nama dicocokkan secara longgar ("media nest" → `media-nest`), karena instruksinya datang dari
+  pengenalan suara.
+- **Satu job dalam satu waktu.** Setiap project menjalankan satu job dalam satu waktu, dan totalnya paling banyak
+  `JOBS_MAX_RUNNING` job.
+- **Sesi.** Setiap project punya satu sesi di `JOBS_SESSIONS_PATH`, terpisah dari sesi chat WhatsApp. Job melanjutkan sesi itu
+  kecuali `new_session` diisi, dan sesi hanya disimpan kalau job berhasil.
+- **Aturan tambahan di system prompt.** Prompt tambahan (`jobs.SystemPrompt`) meminta Claude untuk:
+  - membaca nama yang salah dengar secara longgar;
+  - tidak push, merge, deploy, rilis, atau menghapus tanpa `KONFIRMASI: ya` di instruksi, dan bertanya dulu;
+  - mengikuti `CLAUDE.md` repo;
+  - menutup dengan `RINGKASAN:` (satu sampai tiga kalimat lisan bahasa Indonesia, dengan suara asisten, tanpa menyebut Claude)
+    dan `DETAIL:` (laporan untuk WhatsApp).
+- **Akses.** `JOBS_ADDR` wajib alamat loopback, dan token minimal 24 karakter.
+- **Riwayat.** Riwayat job disimpan di memori (50 job terakhir). Restart menghentikan job yang sedang jalan tanpa laporan.

@@ -208,6 +208,8 @@ Semua lewat `.env` di direktori instalasi (`chmod 600`; template lengkap dengan 
 | `ADMIN_AUTH_FILE` | Tempat login admin disimpan (default `~/.claude-whatsapp/admin.json`). |
 | `ALERTS_FILE` | Tempat pengaturan alert Discord disimpan (default `~/.claude-whatsapp/alerts.json`). |
 | `ADMIN_PASSWORD`, `ADMIN_USER` | **Hanya bootstrap lama:** kalau belum ada file login, password ini di-hash menjadi file itu pada start pertama (user `ADMIN_USER`, default `admin`); setelahnya diabaikan — hapus dari `.env`. |
+| `JOBS_ADDR`, `JOBS_TOKEN`, `JOBS_PROJECTS` | **API voice job (opsional)** untuk asisten suara: alamat loopback, token bearer (minimal 24 karakter), repo yang diizinkan (atau `*`). Mati kalau `JOBS_ADDR` tidak diisi. Lihat [`docs/ARCHITECTURE.id.md` §17](docs/ARCHITECTURE.id.md#17-voice-jobs-internaljobs). |
+| `JOBS_NOTIFY_URL`, `JOBS_WHATSAPP_TO` | Tujuan ringkasan lisan voice job, dan chat yang menerima laporan lengkapnya (default: nomor `ALLOWED_SENDERS` Anda). |
 
 Untuk mengubah `.env`: edit lalu `systemctl --user restart claude-whatsapp.service claude-whatsapp-admin.service` (dan `docker compose up -d` di direktori instalasi kalau yang diubah menyangkut gowa).
 
@@ -317,6 +319,7 @@ Mulai dari [Admin UI](#admin-ui): status, alasan, dan log biasanya sudah menunju
 - **Satu `claude -p` per chat pada satu waktu** — dikunci per `chat_id`; pesan lain untuk chat yang sama antre, bukan berebut sesi `--resume` yang sama.
 - **Mode personal dan tim** — satu nomor di DM, atau satu grup dengan roster yang disetujui dan @mention wajib; diatur dari Admin UI dan berlaku tanpa restart ([di atas](#siapa-yang-boleh-memerintah-bot)).
 - **Admin UI** — status, pemulihan WhatsApp, login Claude, kontrol akses, dan alert Discord, di balik login sendiri ([di atas](#admin-ui)).
+- **Voice job (opsional)** — API loopback untuk asisten suara, supaya bisa menyerahkan tugas Claude Code di salah satu repo Anda. Tugasnya berjalan di belakang, lalu dilaporkan sebagai ringkasan lisan singkat plus pesan WhatsApp lengkap ([§17](docs/ARCHITECTURE.id.md#17-voice-jobs-internaljobs)).
 
 **Belum diimplementasikan:** approval tool-call lewat reaction emoji, dan rate limiting lintas-chat (tiap chat berbeda = proses `claude -p` sendiri, tanpa batas jumlah paralel). Kontribusi/PR dipersilakan.
 
@@ -334,6 +337,7 @@ claude-whatsapp/
 │   ├── config/                      # baca & validasi .env
 │   ├── gowa/                        # REST client ke gowa
 │   ├── webhook/                     # verifikasi HMAC, parsing lampiran, orkestrasi
+│   ├── jobs/                        # API voice job: claude -p di belakang per project, laporan lisan + WhatsApp
 │   ├── claude/                      # exec claude -p, parse JSON
 │   ├── session/                     # chat_id -> session_id
 │   ├── pending/                     # antrian durable — replay setelah crash

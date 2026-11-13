@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -72,6 +74,20 @@ type Config struct {
 	WhisperModel string
 	FFmpegBin    string
 	WhisperLang  string
+
+	// Voice jobs (internal/jobs): a localhost API that kawan-bridge (Eca's voice
+	// assistant) calls to run Claude Code tasks in the background. Off unless
+	// JOBS_ADDR is set; JOBS_TOKEN is then required.
+	JobsAddr          string
+	JobsToken         string
+	JobsProjectsDir   string        // projects are the git repos directly in here
+	JobsProjects      []string      // allowed project names, or "*" for all of them
+	JobsNotifyURL     string        // spoken reports go here (kawan-bridge /notify)
+	JobsWhatsAppTo    string        // full reports go to this chat; default: the ALLOWED_SENDERS owner
+	JobsSessionsPath  string        // project -> session, separate from the WhatsApp chats' sessions
+	JobsTimeout       time.Duration // per job
+	JobsMaxRunning    int           // across all projects
+	JobsProgressEvery time.Duration // spoken progress note interval while a job runs (0 = off)
 }
 
 func FromEnv() (*Config, error) {
@@ -101,6 +117,10 @@ func FromEnv() (*Config, error) {
 		WhisperLang:      getEnv("WHISPER_LANG", "auto"),
 	}
 
+	if err := cfg.jobsFromEnv(home); err != nil {
+		return nil, err
+	}
+
 	if cfg.WebhookSecret == "" {
 		return nil, fmt.Errorf("WEBHOOK_SECRET is required")
 	}
@@ -111,6 +131,12 @@ func FromEnv() (*Config, error) {
 	}
 	cfg.AllowedSenders = splitAllowlist(allowed)
 	cfg.AllowedGroups = splitAllowlist(os.Getenv("ALLOWED_GROUPS"))
+	if cfg.JobsWhatsAppTo == "" && len(cfg.AllowedSenders) > 0 {
+		cfg.JobsWhatsAppTo = cfg.AllowedSenders[0]
+	}
+	if cfg.JobsWhatsAppTo != "" && !strings.Contains(cfg.JobsWhatsAppTo, "@") {
+		cfg.JobsWhatsAppTo += "@s.whatsapp.net"
+	}
 
 	return cfg, nil
 }
@@ -131,4 +157,41 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func (cfg *Config) jobsFromEnv(home string) error {
+	cfg.JobsAddr = os.Getenv("JOBS_ADDR")
+	cfg.JobsToken = os.Getenv("JOBS_TOKEN")
+	cfg.JobsProjectsDir = getEnv("JOBS_PROJECTS_DIR", home+"/repository")
+	cfg.JobsProjects = splitAllowlist(os.Getenv("JOBS_PROJECTS"))
+	cfg.JobsNotifyURL = os.Getenv("JOBS_NOTIFY_URL")
+	cfg.JobsWhatsAppTo = os.Getenv("JOBS_WHATSAPP_TO")
+	cfg.JobsSessionsPath = getEnv("JOBS_SESSIONS_PATH", home+"/.claude-whatsapp/voice-sessions.json")
+	var err error
+	if cfg.JobsTimeout, err = time.ParseDuration(getEnv("JOBS_TIMEOUT", "30m")); err != nil {
+		return fmt.Errorf("JOBS_TIMEOUT: %w", err)
+	}
+	if cfg.JobsProgressEvery, err = time.ParseDuration(getEnv("JOBS_PROGRESS_EVERY", "4m")); err != nil {
+		return fmt.Errorf("JOBS_PROGRESS_EVERY: %w", err)
+	}
+	if _, err := fmt.Sscan(getEnv("JOBS_MAX_RUNNING", "2"), &cfg.JobsMaxRunning); err != nil || cfg.JobsMaxRunning < 1 {
+		return fmt.Errorf("JOBS_MAX_RUNNING: expected a number >= 1")
+	}
+	if cfg.JobsAddr == "" {
+		return nil
+	}
+	if len(cfg.JobsToken) < 24 {
+		return fmt.Errorf("JOBS_TOKEN is required (24+ characters) when JOBS_ADDR is set")
+	}
+	if len(cfg.JobsProjects) == 0 {
+		return fmt.Errorf("JOBS_PROJECTS is required when JOBS_ADDR is set (comma-separated repo names, or *)")
+	}
+	host, _, err := net.SplitHostPort(cfg.JobsAddr)
+	if err != nil {
+		return fmt.Errorf("JOBS_ADDR: %w", err)
+	}
+	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		return fmt.Errorf("JOBS_ADDR must be a loopback address (it can run code in your repos), got %q", cfg.JobsAddr)
+	}
+	return nil
 }

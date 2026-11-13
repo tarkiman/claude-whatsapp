@@ -14,6 +14,7 @@ import (
 	"github.com/tarkiman/claude-whatsapp/internal/claude"
 	"github.com/tarkiman/claude-whatsapp/internal/config"
 	"github.com/tarkiman/claude-whatsapp/internal/gowa"
+	"github.com/tarkiman/claude-whatsapp/internal/jobs"
 	"github.com/tarkiman/claude-whatsapp/internal/pending"
 	"github.com/tarkiman/claude-whatsapp/internal/session"
 	"github.com/tarkiman/claude-whatsapp/internal/transcribe"
@@ -43,6 +44,7 @@ func main() {
 	handler := webhook.New(cfg, gowaClient, runner, store, pendingStore, newTranscriber(cfg), accessStore)
 
 	replayPending(handler, pendingStore)
+	startJobs(cfg, runner, gowaClient)
 
 	mux := http.NewServeMux()
 	mux.Handle("/webhook", handler)
@@ -114,4 +116,39 @@ func replayPending(handler *webhook.Handler, store *pending.Store) {
 	for _, m := range msgs {
 		go handler.Replay(m)
 	}
+}
+
+// startJobs serves the voice job API on JOBS_ADDR (loopback only) when it is set:
+// kawan-bridge starts Claude Code tasks through it, Eca reads the summaries out
+// (JOBS_NOTIFY_URL) and the full reports arrive on WhatsApp.
+func startJobs(cfg *config.Config, runner *claude.Runner, gowaClient *gowa.Client) {
+	if cfg.JobsAddr == "" {
+		return
+	}
+	sessions, err := session.Open(cfg.JobsSessionsPath)
+	if err != nil {
+		log.Fatalf("jobs: session store: %v", err)
+	}
+	var detail func(string)
+	if cfg.JobsWhatsAppTo != "" {
+		detail = func(text string) {
+			if err := gowaClient.SendMessage(cfg.JobsWhatsAppTo, text); err != nil {
+				log.Printf("jobs: WhatsApp report: %v", err)
+			}
+		}
+	}
+	manager := jobs.New(jobs.Options{
+		ProjectsDir:   cfg.JobsProjectsDir,
+		Allowed:       cfg.JobsProjects,
+		Timeout:       cfg.JobsTimeout,
+		MaxRunning:    cfg.JobsMaxRunning,
+		ProgressEvery: cfg.JobsProgressEvery,
+		ProgressMax:   0, // a note every JOBS_PROGRESS_EVERY while the job moves on
+		Notify:        jobs.Notifier(cfg.JobsNotifyURL),
+		Detail:        detail,
+	}, runner, sessions)
+	go func() {
+		log.Printf("jobs: voice job API on %s (projects in %s: %v)", cfg.JobsAddr, cfg.JobsProjectsDir, cfg.JobsProjects)
+		log.Fatal(http.ListenAndServe(cfg.JobsAddr, jobs.Handler(manager, cfg.JobsToken)))
+	}()
 }
